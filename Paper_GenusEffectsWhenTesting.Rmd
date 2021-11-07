@@ -1,0 +1,78 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+require(metagenomeSeq)
+require(matrixStats)
+require(metagenomeSeq)
+require(portra50)
+require(matrixStats)
+require(MASS)
+require(prokounter)
+require(breakaway)
+require(nnet)
+
+source('~/Documents/research/StatisticalAnalysisProjects/NSPSU/utils_prokounter.R')
+source('~/Documents/research/intensityBias/src/otherDivsCalls.R')
+
+pltProkounterDatForGenus <- function( pkobj, genusLabel, esetobj, pdatColLabel="Sample_Def", bplt=TRUE  ) {
+  so <- subset( pkobj$df, g== genusLabel ); so <- so[ order( so$lr ), ]
+  grp <- pData( esetobj )[ so$samples, ][[pdatColLabel]];
+  if(!is.factor(grp))
+    grp <- factor( as.character(grp) )
+  cc <- getColsForFactors( gr=grp, set="Paired", m=10 )
+  stopifnot(length(grp)==nrow(so))
+  
+  if(bplt){
+    boxplot( c(lm) ~grp, col = cc$map[,1] , las=2, data = so, ylab = "Log Observed Richness")
+  }
+  
+  plot( lm~lr, data=so, col = cc$cols, 
+        xlab = "Log Recovered Abundance", ylab = "Log Observed Richness", main = genusLabel ); 
+  points( ltv~lr, data = so, col ='gray', cex=.5 , type='o')
+  legend( "topleft", cc$map[,2], fill=cc$map[,1], bty="n"  )
+  legend( "bottomright", expression(kappa + f[R](.) ) , col = "gray", pch=19, lty=1, bty="n" )
+  
+  pred <- predict( pkobj$fit, include=c("lr:g"), newdata=so ) 
+  plot( pred ~ so$lr, xlab = "Log Recovered Abundance", ylab = expression(f[GR](.)), col = cc$cols, type='o' )
+    
+}
+
+extrProkSigGenusEffects <- function(pkobj){
+  gs <- unique( as.character(pkobj$df$g[  which( pkobj$df$gtv.sigs==1 ) ]) )
+  indx <- match( gs, as.character(pkobj$df$g) )
+  df <- data.frame("g"=gs, "effect"=pkobj$df$gtv[indx] )
+  df[ order( abs(df$effect ), decreasing=TRUE ), ]
+}
+
+```
+
+Illustrate with mouse data
+```{r}
+data(mouseData)
+mouse <- convertMRtoES(mouseData)
+genus <- as.character( fData(mouse)$genus )
+des <- model.matrix( ~diet, data=pData(mouse) )#make sure the design matrix's row names are annotated with column names of the data matrix
+
+pmouse <- prokounter:::getProkounterTrends( mat=exprs(mouse), 
+                                            genus = as.character(fData(mouseData)$genus), fit.proc = "ss", plt=FALSE)
+head( extrProkSigGenusEffects( pmouse ) )
+
+
+pdf( file="./results/images/MousePrevotellaGenusEffectsIllustration_A.pdf" , useDingbats = FALSE )
+op <- par(mfrow=c(1,3), pty='s')
+plot( lm ~ lr, data=pmouse$df, col = "gray", ylab = "Log Observed Richness", xlab = "Log Recovered abundance"  )
+points( lm ~ lr, data=subset(pmouse$df, g=="Prevotella"), col = 'red', pch=19  )
+legend( "topleft", c("Prevotella", "Other"), fill=c("red", "gray"), bty="n" )
+dev.off()
+
+pdf( file="./results/images/MousePrevotellaGenusEffectsIllustration_B_prokEffects.pdf" , useDingbats = FALSE )
+op <-par(mfrow=c(1,3), pty='s')
+pltProkounterDatForGenus( pkobj = pmouse, genusLabel = "Prevotella", esetobj=mouse, pdatColLabel = "diet", bplt=TRUE )
+dev.off()
+```

@@ -1,0 +1,732 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+Load utils. 
+```{r}
+require(metagenomeSeq)
+require(matrixStats)
+require(metagenomeSeq)
+require(portra50)
+require(matrixStats)
+require(MASS)
+require(doParallel)
+
+source('~/Documents/research/StatisticalAnalysisProjects/NSPSU/utils_prokounter.R')
+source("~/Documents/research/intensityBias/src/amplif.R")
+```
+
+
+
+# Asexual reproduction
+
+Some constants, check if ncore makes sense for the machine used. 
+```{r}
+LENGTH <- 250
+NCORE <- 6
+```
+
+
+Vary mutation rates of the cell p_m. 
+```{r}
+L <- LENGTH
+pmVec <- 10^seq(-10, -4); names(pmVec) <- pmVec
+TOT.CYCLES <- 50
+
+condmats <- lapply(pmVec, function(pM) {
+  getCondMat.array( L=L, pm=pM, N=TOT.CYCLES, nc=NCORE ) 
+})
+
+margs <- lapply( condmats, getMarg )
+
+probMats <- list()
+probMats$condmats <- condmats
+probMats$margs <- margs
+saveRDS(probMats, file="~/Documents/research/intensityBias/results/probMats.RDS")
+
+```
+
+
+Specialization for  Pseudomonas
+```{r}
+L <- LENGTH
+pmVec <- 10^c(-10, -8)
+TOT.CYCLES <- 24
+
+condmats <- lapply(pmVec, function(pM) {
+  getCondMat.array( L=L, pm=pM, N=TOT.CYCLES, nc=NCORE ) 
+})
+
+margs <- lapply( condmats, getMarg )
+
+probMats <- list()
+probMats$condmats <- condmats
+probMats$margs <- margs
+saveRDS(probMats, file="./results/pseudopars.RDS")
+
+#probOTUType 
+
+delta <- .01
+deltaL <- delta*L
+indx <- seq(round(deltaL), L+1)
+Nchildren <- 2^10
+avgSubs <- sapply(probMats$margs, function(x) sum( seq(0,250)*x[1,,24] ) )
+probFalseClass <- sapply(probMats$margs, function(x) sum( x[1,indx,24] ))
+probFalseClass
+NumOTUTypeChildren <- probFalseClass*Nchildren
+NumOTUTypeChildren
+
+delta <- .03
+deltaL <- delta*L
+indx <- seq(round(deltaL), L+1)
+Nchildren <- 2^10
+avgSubs <- sapply(probMats$margs, function(x) sum( seq(0,250)*x[1,,24] ) )
+probFalseClass <- sapply(probMats$margs, function(x) sum( x[1,indx,24] ))
+probFalseClass
+NumOTUTypeChildren <- probFalseClass*Nchildren
+NumOTUTypeChildren
+```
+
+
+
+```{r}
+
+probMats <- readRDS(file="~/Documents/research/intensityBias/results/probMats.rds")
+
+
+pltForDelta <- function(probMats, L, delta=.01, tau=10^( seq(1, 7) ), pltCyc=TRUE, N=50 ){
+  
+  deltaL <- delta*L
+  indx <- seq(round(deltaL), L+1)
+  
+  # plot as a function of cycles
+  if(pltCyc){
+    cyc.wise <- lapply( probMats$margs, function(marg){
+    colSums( marg[1,indx,]  )
+  } )
+  cyc.wise <- do.call( cbind, cyc.wise )
+  pltMat( log10(cyc.wise), legend.pos="bottomright", 
+          facs = factor( colnames(cyc.wise), levels=sort(as.numeric(colnames(cyc.wise))) ),
+          xl = "Generations", 
+          yl = bquote( log[10]~"False Classification Rate"  ), 
+          legend.tit=expression( p[m] )
+          )
+  }
+  
+  
+  
+  #op <- par(mfrow=c(1,2), pty='s')
+  # plot as a function of mutation rate at 50 generations
+  mut.wise <- sapply( probMats$margs, function(marg){
+    sum( marg[1,indx,50]  )
+  } )
+  cc <- getColsForFactors( factor( names(probMats$margs), levels=sort( as.numeric(names(probMats$margs)) ) ), set="Paired" )
+  barplot( log10(mut.wise), las=2, xlab = expression(p[m]), ylab = bquote(log[10]~"False classification rate"),col=cc$cols )
+  
+  l10falseclass <-( N*log10(2) + outer( log10(tau), log10(mut.wise), "+" )) 
+  
+  
+  pltMat( x=log10(tau), l10falseclass, legend.pos="bottomright", legend.on = FALSE,
+          facs = factor( colnames(cyc.wise), levels=sort(as.numeric(colnames(cyc.wise))) ),
+          yl = bquote( log[10]~"Avg. Num. False Classifications" ), 
+          xl = bquote( log[10]~"Initial Abundance"  )
+          )
+  
+  #par(op)
+}
+
+
+pltForDeltaOTUbins <- function(smat, L=(length(smat)-1), delta=.01, tau=10^( seq(1, 15) ), plt=TRUE){
+  
+  deltaL <- delta*L
+  bins <- round( seq( 0, L, by=deltaL ) )
+  otu.p <- aggregate( smat, list(cut( as.numeric(names(smat)), breaks = bins, right=FALSE)), sum )
+  #barplot( log2(otu.p$x[1:5]) )
+  
+  fdp <- 1-exp( outer( tau, log( 1-otu.p$x )) )
+  fdr <- rowSums(fdp[,-1]) #ignore the true guy
+  fdiscs.up <- qpois( .975, lambda= fdr )
+  fdiscs.ave <- fdr
+  fdiscs.lo <- qpois( .025, lambda= fdr )
+  
+  if(plt){
+    yl=c(min(fdiscs.lo)-1, max(fdiscs.up)+1)
+    plot( fdiscs.up~log10(tau), type='l', xlab = bquote(log[10]~"Initial abundance"), ylab = "Num. false delta*L bins sampled", ylim=yl, lty=2  )
+    lines( fdiscs.ave~log10(tau), type='l', col = 'red'   )
+    lines( fdiscs.lo~log10(tau), type='l' , lty=2 )
+    legend("topleft", legend=bquote( delta~"="~.(delta) ),  bty="n"  ) 
+    
+  }
+  
+  fdiscs.ave
+}
+
+pltSampledBinsAcrossPms <- function(probMats, L, delta){
+  delta.01 <- lapply( probMats$margs, function(x){
+    sm <-x[1,,50]; 
+    names(sm) <- seq(0, length(sm)-1)  
+    pltForDeltaOTUbins( smat=sm, L=L, delta=delta, plt=FALSE); 
+  } )
+  fbins <- do.call(cbind, delta.01) 
+  pltMat( fbins, legend.pos="topleft", 
+          facs = factor( colnames(fbins), levels=sort(as.numeric(colnames(fbins))) ),
+          yl = bquote( "False"~ delta*L~"bins sampled" ), 
+          xl = bquote( log[10]~"Initial abundance"  ), 
+          legend.tit=expression( p[m] )
+  )  
+}
+
+pdf( file="./results/images/cellularRep.pdf", paper = "a4r", width=8.267, height=11.69, useDingbats = FALSE )
+op <- par(mfrow=c(2,4), pty='s', mar=c(4,4,2,1))
+pltForDelta(probMats, L=L, delta=.01 )
+pltSampledBinsAcrossPms( probMats = probMats, L=L, delta=.01 )
+pltForDelta(probMats, L=L, delta=.03 )
+pltSampledBinsAcrossPms( probMats = probMats, L=L, delta=.03 )
+dev.off()
+par(op)
+
+
+```
+
+
+# Amplification
+
+Look at RMD Paper_AmplificationSimulation.Rmd.
+
+First biological.
+```{r}
+CYCLES <- 40
+LENGTH <- 250
+hmat <- readRDS(file="./results/hmat.RDS") #computed for taq error rate for LENGTH=250bp
+
+Pn.giv.0 <- array(0, dim = dim( hmat  )) #marginals (i.e., conditional of Sn | S0=0).
+Pn.giv.0[,,1]<- hmat[,,1]
+for( n in seq(2,dim(hmat)[3]) ){
+  Pn.giv.0[,,n] <- Pn.giv.0[,,n-1]%*%hmat[,,n]
+} #transiting to states in n^th step when the initial state is 0.  
+
+getFalseClassificationsForCyc <- function( Pn.giv.0, fst=.03,
+                                    lam_vec = c(.1, .2, .4, .8, .95, 1),
+                                    L=LENGTH, 
+                                    cyc=CYCLES, 
+                                    l10abun=seq(0,10,by=.01), 
+                                    legend.on=TRUE
+                                    ){
+  l <- round(fst*L)
+  qn <- sapply( seq(cyc), function(n){
+    sum( Pn.giv.0[1,(l:dim(Pn.giv.0)[2]),n] ) #for a 250 length. 
+  }  )
+  nvec <- seq(cyc)
+  lch <- lchoose( cyc, nvec )
+  #lnvec <- nvec*log(lam) 
+  
+  netq.times.strands <- colSums( exp( 
+      sweep( outer( nvec, log(lam_vec), "*" ), 1, lch + log(qn[1:cyc]), "+" )  
+      ) )
+  
+  #op <- par(mfrow=c(1,2),pty='s')
+  plot( log2(qn) ~ log2(nvec), 
+        xlab = bquote(log[2]~"Extension cycles"), 
+        ylab = bquote( log[2]~"False classification rate"),
+        type='o')
+  legend( "topleft", legend=bquote(FST.~.(1-fst)), bty="n" )
+  cc <- getColsForFactors( factor(lam_vec, levels=lam_vec), set="Paired" )
+  z <- log2(outer( 2*(10^l10abun), netq.times.strands, "*" ) )
+  matplot( log2(10^l10abun), z, ylim=c(0, max(z)+1), col = cc$map[,1], type='l', xlab = bquote(log[2]~"Initial Abundance"), 
+           ylab = bquote(log[2]~"Number of False classifications")  
+           )
+  if(legend.on){
+    legend("topleft", cc$map[,2], fill= cc$map[,1], bty="n", title=bquote(lambda) )  
+  }
+  
+  #par(op)
+  
+  
+}
+
+getFalseClassificationsForEff <- function( Pn.giv.0, 
+                                           fst=.03,
+                                           lam = .8,
+                                           cyc_vec = c(10,20,30,40,50),
+                                           L=LENGTH, 
+                                           l10abun=seq(0,10,by=.01), 
+                                           legend.on=TRUE
+                                    ){
+  l <- round(fst*L)
+  qn_mat <- lapply( cyc_vec, function(cyc){
+    sapply( seq(cyc), function(n){
+      sum( Pn.giv.0[1,(l:dim(Pn.giv.0)[2]),n] ) #for a 250 length. 
+    }  )
+  } ) 
+  
+  nvec_mat <- lapply(cyc_vec, function(cyc) seq(cyc) ) 
+  lch_mat <- lapply( cyc_vec, function(cyc) lchoose(cyc, seq(cyc)) )
+  
+  
+  netq.times.strands <- do.call(c, lapply( seq_along(cyc_vec), function(i){
+    cyc <- cyc_vec[[i]]
+    sum( exp( 
+      nvec_mat[[i]]*log(lam) + lch_mat[[i]] + log(qn_mat[[i]][1:cyc])   
+      ) ) 
+  }  ) )
+  
+  
+  #op <- par(mfrow=c(1,1),pty='s')
+  
+  cc <- getColsForFactors( factor(cyc_vec, levels=cyc_vec), set="Paired" )
+  z <- log2(outer( 2*(10^l10abun), netq.times.strands, "*" ) )
+  matplot( log2(10^l10abun), z, ylim=c(0, max(z)+1), col = cc$map[,1], type='l', xlab = bquote(log[2]~"Initial Abundance"), 
+           ylab = bquote(log[2]~"Number of False classifications")  
+           )
+  if(legend.on){
+    legend("topleft", cc$map[,2], fill= cc$map[,1], bty="n", title=bquote(cycles) )  
+  }
+  legend( "topright", legend=bquote(FST.~.(1-fst)~","~lambda~"="~.(lam)), bty="n" )
+
+  
+  #par(op)
+  
+  
+}
+
+
+
+pdf(file="~/Documents/research/intensityBias/results/amp.eff.FST.taq.pdf")
+op <- par(mfcol=c(2,2),pty='s')
+getFalseClassificationsForCyc(Pn.giv.0 = Pn.giv.0, fst = (1-.99), legend.on = FALSE, cyc = 40 )
+getFalseClassificationsForCyc(Pn.giv.0 = Pn.giv.0, fst = (1-.97), cyc=40 )
+dev.off()
+par(op)
+
+pdf(file="~/Documents/research/intensityBias/results/amp.eff.FST.taq_cycleDep.pdf")
+op <- par(mfcol=c(2,2),pty='s')
+getFalseClassificationsForEff(Pn.giv.0 = Pn.giv.0, fst = (1-.99), legend.on = FALSE, 
+                              lam =.8 )
+getFalseClassificationsForEff(Pn.giv.0 = Pn.giv.0, fst = (1-.99), legend.on = FALSE, 
+                              lam =.4 )
+getFalseClassificationsForEff(Pn.giv.0 = Pn.giv.0, fst = (1-.97), legend.on = FALSE, 
+                              lam =.8 )
+getFalseClassificationsForEff(Pn.giv.0 = Pn.giv.0, fst = (1-.97), legend.on = TRUE, 
+                              lam =.4 )
+dev.off()
+par(op)
+
+
+```
+
+
+
+# Sequencing
+
+Some functions 
+
+We shall plot the quality scores, the substitutions expected post trimming. 
+
+```{r}
+
+cbind.fill <- function(...){ #thanks to https://stackoverflow.com/questions/7962267/cbind-a-dataframe-with-an-empty-dataframe-cbind-fill . Needed here because we might not have any data for certain positions for some nts. R's base cbind, simply adds the last value over and over, which is not what we want..   
+    nm <- list(...) 
+    nme <- names(nm)
+    nm <- lapply(nm, as.matrix)
+    n <- max(sapply(nm, nrow)) 
+    m <- do.call(cbind, lapply(nm, function (x) 
+      rbind(x, matrix(, n-nrow(x), ncol(x))))) 
+    colnames(m) <- nme
+    m
+}
+
+getSubProbs <- function(seqs.vec, qualities, plt=FALSE, ... ){
+   
+  getStForNt <- function(seqs, qualities, nt="A", l10ProbPredObj=NULL){
+    
+    spl.seqs <- strsplit(seqs,"")
+    
+    nttab <- do.call( rbind, lapply( seq_along(spl.seqs), function(k) {
+        x <- which( spl.seqs[[k]] == nt )
+        qx <- qualities[ k, x]
+        if(!is.null(l10ProbPredObj)){
+          qx <- -10*log10( 10^predict( l10ProbPredObj, qx ) ) 
+        }
+        data.frame( "x"=x, "qx"=qx )
+      }) )
+    
+    nttab
+    
+  }
+  
+  nts <- c("A","T","G","C")
+  names(nts) <- nts
+  nt.stats <- lapply( nts, function(nt){
+    tab <- getStForNt( seqs.vec, qualities, nt=nt, ...  )
+    res <- list()
+    res$nt <- nt
+    res$ave <- aggregate( tab, by=list(tab$x), mean )  
+    res$var <- aggregate( tab, by=list(tab$x), var )
+    res$n <- aggregate( tab, by=list(tab$x), length )
+    res
+  } )
+  
+  
+
+  
+  RES <- list()
+  RES$aves <- do.call(cbind.fill, lapply( nt.stats, function(x) x$ave$qx ) )
+  RES$vars <- do.call(cbind.fill, lapply( nt.stats, function(x) x$var$qx ))
+  RES$ln <-do.call(cbind.fill, lapply( nt.stats, function(x) x$n$qx ))
+  RES$net.sub.prob <- sapply( seq(nrow(RES$aves)), 
+                              function(x) weighted.mean( 10^(-RES$aves[x,]/10) ,
+                                                         w=RES$ln[x,], na.rm=TRUE )   
+                              )
+  if(plt){
+    pltSubObj( RES )
+  }
+  
+  RES
+  
+}
+
+pltSubObj <- function(subobj){
+  cc <- getColsForFactors( factor(colnames(subobj$aves), 
+                                  levels=colnames(subobj$aves)), set="Paired" )
+  matplot(subobj$aves, pch=19, col = cc$map[,1], xlab ="Position", ylab = "Quality score, for the obs. nt. to be mutated")
+  legend("bottomleft", legend=cc$map[,2], fill=cc$map[,1],bty="n")
+  plot( subobj$net.sub.prob, type='l', 
+        ylab = "Net substitution probability", xlab = "Position" 
+  )
+}
+
+
+# Sequence machine engineers' take
+getFlam <- function(phred, fr.tr=10, ltr=ncol(phred) ) {
+  gr <- rowSums( 10^(-phred[,fr.tr:ltr]/10), na.rm=TRUE )  
+  fx <- density( gr )
+  lam <- seq(min(fx$x), max(fx$x), by=.01)
+  flam <- approx( fx$x, fx$y, xout = seq(min(fx$x), max(fx$x), by=.01) )
+  flam$L <- ltr-fr.tr+1 
+  flam
+}
+
+
+buildFit <- function(phred, 
+                     phred2prob=function(x){ 10^(-phred/10) }, 
+                     fr.tr=10,
+                     ltr=ncol(phred), sdts=1-c(.99, .97, .945, .865, .82),#, .785, .75), 
+                     mod="num", #num or nb
+                     plt=FALSE){
+  
+  names(sdts) <- sdts
+  phred <- phred[,fr.tr:ltr]
+  #tokeep <- which( rowSums(!is.na(phred[,1:ltr])) == ltr )
+  #phred <- phred[tokeep,]
+  
+  gr <- rowSums( 10^(-phred/10), na.rm=TRUE )  #mean*L
+  print(mean(gr,na.rm=TRUE))
+  
+  if( mod == "num" ){
+    fx <- density( gr )
+    #integrate( approxfun( fx ), lower=min(fx$x), upper=max(fx$x), subdivisions = 5000, rel.tol=.Machine$double.eps^.1 )
+    
+    lam <- seq(min(fx$x), max(fx$x), by=.01)
+    flam <- approx( fx$x, fx$y, xout = seq(min(fx$x), max(fx$x), by=.01) )
+    
+    ps <- sweep( outer( flam$x, seq(0,ltr), function(lam,s) dpois(s, lambda = lam) ), 1, flam$y, "*" ) 
+    ps <- colSums( ps, na.rm=TRUE)/sum( colSums(ps, na.rm=TRUE) )
+    ps <- ps/sum(ps)
+    lqs <- log( ps )
+    names(lqs) <- seq(0,ltr)
+    
+  } else if (mod == "nb" ){ #the gamma fit is unsatisfactory. 
+    if(plt)
+      hist( gr )
+    
+    m <- mean(gr); v <- var(gr); shape <- m^2/v; scale = v/m; 
+    print(m)
+    if(plt)
+      qqplot( gr, rgamma( n = 1000, shape=shape, scale = scale ) ); abline(0,1)
+    
+    sze <- shape
+    prob <- 1/(1+scale)
+    lqs <- dnbinom( seq(0,ltr), size=sze, prob = prob, log=TRUE )
+    names(lqs) <- seq(0,ltr)
+    
+  }
+  
+  if(plt)
+      barplot( lqs[1:10] )
+    
+  
+  qNets <- sapply( round( sdts*ltr ), function(deltaL) sum( exp(lqs[deltaL:ltr]) )  )
+  
+  list( 
+    "lqs"=lqs,
+    "qNets"=qNets
+    )
+  
+}
+
+pltForDeltaOTUbins <- function(smat, L=(length(smat)-1), delta=.01, tau=10^( seq(10) ), plt=TRUE){
+  
+  deltaL <- delta*L
+  bins <- round( seq( 0, L, by=deltaL ) )
+  otu.p <- aggregate( smat, list(cut( as.numeric(names(smat)), breaks = bins, right=FALSE)), sum )
+  #barplot( log2(otu.p$x[1:5]) )
+  
+  fdp <- 1-exp( outer( tau, log( 1-otu.p$x )) )
+  fdr <- rowSums(fdp[,-1]) #ignore the true guy
+  fdiscs.up <- qpois( .975, lambda= fdr )
+  fdiscs.ave <- fdr
+  fdiscs.lo <- qpois( .025, lambda= fdr )
+  
+  if(plt){
+    yl=c(min(fdiscs.lo)-1, max(fdiscs.up)+1)
+    plot( fdiscs.up~log10(tau), type='l', xlab = bquote(log[10]~"Sampling Depth"), ylab = "Num. false delta*L bins sampled", ylim=yl, lty=2  )
+    lines( fdiscs.ave~log10(tau), type='l', col = 'red'   )
+    lines( fdiscs.lo~log10(tau), type='l' , lty=2 )
+    legend("topleft", legend=bquote( "FST"~.(1-delta) ),  bty="n"  ) 
+    
+  }
+  
+  fdiscs.ave
+}
+
+
+
+```
+
+
+
+Trimming need not necessarily bring down the error rate. Trimming reduces the length, so a 97% sequence identity threshold varies with length. 
+
+
+```{r}
+library(ShortRead)
+fastqDir <- "/Users/senthil/Documents/research/intensityBias/data/cycvar/rawData2/"
+fastqPath <- list.files(fastqDir, pattern = ".fastq.gz$", full.names = TRUE)[1]
+reads <- readFastq(fastqPath)
+#quality(reads)[1]
+#sread(reads)
+#as.character(sread(reads))
+as(quality(reads), "matrix")[1:2,1:10] #" In this conversion, each letter is matched to an integer between 0 and 40. This matching is known as the “encoding” of the quality scores and there has been different ways to do this encoding. Unfortunately, it is not stored in the FASTQ file which encoding is used, so you have to know or guess the encoding. The ShortRead package does this for you.These numbers are supposed to related to the probability that the reported base is different from the template fragment (ie. a sequence error). One should be aware that this probabilistic interpretation is not always true; methods such as “quality-remapping” helps to ensure this. From: https://kasperdanielhansen.github.io/genbioconductor/html/ShortRead.html "
+
+
+indx <- sample( length(reads), 10000, replace=FALSE )
+
+
+pdf( file="./results/images/Sequencing_FullvsTrimmedFalseClass.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(1,3), pty='s')
+phreds <-  as(quality(reads[indx]), "matrix")
+h <- getSubProbs( seqs.vec = as.character(sread(reads[indx])), 
+                  qualities = phreds, plt=TRUE )
+h.full <- buildFit( phred = phreds, fr.tr = 10, ltr=ncol(phreds) )
+h.tr <-  buildFit( phred = phreds, fr.tr=10, ltr=200 )
+#barplot( h.full$lqs[1:10], xlab= "Substitutions", 
+         #ylab = bquote( log[10]~"Substitution Probability" )  )
+joined <-data.frame( cbind( log10(h.full$qNets)[1:2], log10(h.tr$qNets)[1:2] )  )
+colnames(joined) <- c("Full Length", "Trimmed")
+library(grDevices)
+cc <- gray.colors(  2 )
+b <- barplot( as.matrix(joined), beside = TRUE, col = cc )
+legend( "bottomright", rownames(joined), fill=cc, bty="n" )
+
+#barplot(log10(h.full$qNets)[1:2], las=2, xlab = "FST", ylab = bquote(log[10]~"False classification rate" ), main = "full length" )
+#barplot( h.tr$lqs[1:10], xlab= "Substitutions", 
+         #ylab = bquote( log[10]~"Substitution Probability" )  )
+#barplot(log10(h.tr$qNets)[1:2], las=2, xlab = "FST", ylab = bquote(log[10]~"False classification rate" ), main = "trimmed" ); 
+par(op)
+dev.off()
+
+
+
+pdf( file="./results/images/Sequencing_FalseClassificationsDeltaLBins.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(2,2), pty='s')
+
+l10.recov.abun <- seq(8)
+l10fprn <- log10(outer( 10^l10.recov.abun, h.full$qNets ))
+cc <- getColsForFactors( gr = factor( colnames(l10fprn), levels=colnames(l10fprn) ), set="Paired" )
+matplot( l10fprn, ylim=c(0, max( l10fprn ) + 1), type='l', lwd=1.5, lty=1, col= cc$map[,1], xlab=bquote( log[10]~"Sampling Depth" ) , ylab = bquote(log[10]~"False Classifications") )
+
+l10fprn <- log10(outer( 10^l10.recov.abun, h.tr$qNets ))
+matplot( l10fprn, ylim=c(0, max( l10fprn ) + 1), type='l', lwd=1.5, lty=1, col= cc$map[,1],  xlab=bquote( log[10]~"Sampling Depth" ) , ylab = bquote(log[10]~"False Classifications") )
+legend("topleft", legend=(1-as.numeric(cc$map[1:3,2])), fill=cc$map[1:3,1], bty="n")
+
+#par(op)
+
+
+#op <- par(mfrow=c(1,2), pty='s')
+pltForDeltaOTUbins( exp(h.full$lqs), delta=.01 )
+pltForDeltaOTUbins( exp(h.full$lqs), delta=.03 )
+dev.off()
+par(op)
+
+```
+
+
+
+Integration of amplificaiton and sequencing
+
+```{r}
+
+rel.ab <- c( .95, .75, .5, .25, 10^(-seq(5))) 
+CYCLES <- 40
+LEN <- 250
+
+
+getOneStepPsiMat.old <- function(pm, pmAmp=10^(-4), ampN=40, L=250, ncore=4, ... ){
+  require(doParallel)
+  cl <- makeCluster( ncore )
+  registerDoParallel(cl)
+  
+  fn <- (1-exp(ampN*log(1-4*pmAmp)))
+  pinherit <- .75*(1-pm)*fn #we have assuemd amplification cycles N is large. To be accurate, the factor 1 should be replaced by [1-(1-4*pmForAmplification)^N]
+  
+  getPsi.S.giv.Sa <- function(s,spar, pm, L, mod="pois"){
+    
+    tip <- min( s, spar )
+    if(mod=="pois"){
+      sum( exp( dpois( seq(0,tip), lambda = spar*pinherit, log=TRUE ) + dpois( s-seq(0,tip), lambda = (L-spar)*3*pm, log=TRUE ) ) )  
+    } else {
+      sum( exp( dbinom( seq(0,tip), size=spar, prob=pinherit, log=TRUE ) + 
+           dbinom( s-seq(0,tip), size=L-spar, prob=3*pm, log=TRUE ) 
+         ) )
+    }
+  }
+  
+  psi.mat <- foreach( sa = 0:L, .combine = 'rbind' ) %:%
+    foreach( s = 0:L, .combine = 'c' ) %dopar% {
+      getPsi.S.giv.Sa( s, sa, pm, L, ...  )
+    }
+  
+  stopCluster(cl)
+  
+  psi.mat
+  
+}
+
+
+getOneStepPsiMat <- function(flam, pmAmp=10^(-4), ampN=40, L=250, ncore=4){
+  require(doParallel)
+  cl <- makeCluster( ncore )
+  registerDoParallel(cl)
+  
+  
+  getPsi.S.giv.Sa <- function(s,spar, L, flam, mod="pois"){
+    
+    tip <- min( s, spar )
+    if(mod=="pois"){
+      fun <- function(pmx_vec, spar){
+        sapply( pmx_vec, function(pm){
+          fn <- (1-exp(ampN*log(1-4*pmAmp)))
+          pinherit <- .75*(1-pm)*fn #we have assuemd amplification cycles N is large. To be accurate, the factor 1 should be replaced by [1-(1-4*pmForAmplification)^N]
+          sum( exp( dpois( seq(0,tip), lambda = spar*pinherit, log=TRUE ) + dpois( s-seq(0,tip), lambda = (L-spar)*3*pm, log=TRUE ) ) )      
+        }  )
+      }
+      pmx_vec <- flam$x/(3*flam$L) #from full length substitution to per base mutation rate
+      ps <- fun( pmx_vec, spar )*flam$y
+      ps <- sum( ps, na.rm=TRUE)
+      
+    } else {
+      sum( exp( dbinom( seq(0,tip), size=spar, prob=pinherit, log=TRUE ) + 
+           dbinom( s-seq(0,tip), size=L-spar, prob=3*pm, log=TRUE ) 
+         ) )
+    }
+  }
+  
+  psi.mat <- foreach( sa = 0:L, .combine = 'rbind' ) %:%
+    foreach( s = 0:L, .combine = 'c' ) %dopar% {
+      getPsi.S.giv.Sa( s, sa, L, flam=flam  )
+    }
+  psi.mat <- sweep( psi.mat, 1, rowSums(psi.mat), "/" )
+  
+  stopCluster(cl)
+  
+  psi.mat
+  
+}
+
+front.st <- 10
+back.upto <- 200
+
+FRTR <- 10
+LTR <- 200
+flam <- getFlam( phreds, fr.tr=FRTR, ltr=LTR )
+psimat <- getOneStepPsiMat( pmAmp = 10^(-4), ampN = CYCLES, L=LTR-FRTR+1, ncore=4, flam )
+
+seq.pm <- mean(seq(0,length(h.full$lqs)-1)*exp(h.full$lqs))
+seq.pm <- seq.pm/3
+alpha.mat <- matrix( probMats$margs$`1e-04`[0+1,,CYCLES], nrow=1 )
+psimat <- getOneStepPsiMat( pm=seq.pm, pmAmp = 10^(-4), ampN = CYCLES, L=250, ncore=4 )
+psimat2 <- getOneStepPsiMat( pm=seq.pm, pmAmp = 10^(-4), ampN = CYCLES, L=250, ncore=4, mod="other" )
+#psimat2 <- getOneStepPsiMat( pm=seq.pm, pmAmp = 10^(-4), ampN = CYCLES, L=200, ncore=4 )
+
+qprof <- alpha.mat[,1:ncol(psimat)]%*% psimat
+names(qprof) <- seq(0,length(qprof)-1)
+barplot( log10(qprof[1:9]), xlab = "Substitutions", ylab = bquote(log[10](p(s)) ) )
+
+sdts <- c(.01, .03, .055, .135, .180)
+qNets <- sapply(sdts, function(dt) sum( qprof[,round(dt*length(qprof)):length(qprof)] ) ) 
+qNets <- sapply(sdts )
+
+pltForDelta <- function(delta=.01, qprof, rel.ab=c(.0125, .0125, .025, .05, .9),legend.on=TRUE, ... ){
+  names(rel.ab) <- paste("Cell Type", seq(5) )
+  len <- length(qprof)
+  qFalseNet <- sum( qprof[round(delta*len):(length(qprof))] ) 
+  
+  cc <- getColsForFactors( factor(seq(length(rel.ab))), set= "Paired" )
+  #barplot( rel.ab, ylab = "Rel. Freq", las=2, col = cc$map[,1] )
+  sdepth <- 10^(seq(1,8, by=.1))
+  avg.rec.ab <- outer(sdepth, rel.ab)
+  mean.prof <- qFalseNet*avg.rec.ab
+  #lower <- apply( mean.prof, 2, function(x)  qpois( .05, lambda=x ) )
+  #upper <- apply( mean.prof, 2, function(x)  qpois( p=.95, lambda = x ) )
+  vars <- apply( mean.prof, 2, function(x)  (1/x^2)*x )
+  #lower <- mean.prof - 1.96*sqrt(vars)
+  #upper <- mean.prof + 1.96*sqrt(vars)
+  
+  
+  cc <- getColsForFactors( factor(seq(ncol(mean.prof))), set= "Paired" )
+  matplot( log10(sdepth), log10(mean.prof), xlab = bquote( log[10]~"Sample Depth"), 
+           ylab = bquote( log[10]~"Average False Classification"), 
+           type='l', lty=1, col = cc$map[,1], lwd=2, ylim=c(0, max(log10(mean.prof))+1), ... )
+  #matlines( log10(sdepth), log10(lower), lwd=1, lty = 2, col = cc$map[,1])
+  #matlines( log10(sdepth), log10(upper), lwd=1, lty = 2, col = cc$map[,1])
+  abline( 0,1 )  
+  if(legend.on)
+      legend("topleft", legend=rel.ab, fill=cc$map[,1], title = "Rel.Freq", bty="n" )
+  cc
+}
+
+op <- par(mfrow=c(2,3), pty='s')
+
+rel.ab=c(.01, .1, .25, .5, .95);names(rel.ab) <- paste("Cell Type", seq(5) )
+cc <- getColsForFactors( factor(seq(length(rel.ab))), set= "Paired" )
+barplot( rel.ab, col = cc$map[,1]  )
+pltForDelta( delta=.01, qprof=qprof, rel.ab = rel.ab )
+pltForDelta( delta=.03, qprof=qprof, rel.ab=rel.ab, legend.on=FALSE )
+
+rel.ab=c(.0125, .0125, .025, .05, .9);names(rel.ab) <- paste("Cell Type", seq(5) )
+cc <- getColsForFactors( factor(seq(length(rel.ab))), set= "Paired" )
+barplot( rel.ab, col = cc$map[,1]  )
+pltForDelta( delta=.01, qprof=qprof )
+pltForDelta( delta=.03, qprof=qprof, legend.on=FALSE )
+par(op)
+
+
+
+#just those input
+  pdf( file="./results/images/Chain_SequencingCycles.pdf", useDingbats = FALSE )
+  op <- par(mfrow=c(1,3), pty='s')
+  rel.ab=c(.0125, .0125, .025, .05, .9);names(rel.ab) <- paste("Cell Type", seq(5) )
+  cc <- getColsForFactors( factor(seq(length(rel.ab))), set= "Paired" )
+  barplot( rel.ab, col = cc$map[,1] , las=2, ylab = "Input Relative Frequency" )
+  pltForDelta( delta=.01, qprof=qprof,main="FST.99" )
+  pltForDelta( delta=.03, qprof=qprof, legend.on=FALSE, main = "FST.97" )
+  dev.off()
+  par(op)
+
+
+```
+
+
+

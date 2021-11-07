@@ -1,0 +1,224 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+```{r}
+require(metagenomeSeq)
+require(matrixStats)
+require(metagenomeSeq)
+require(portra50)
+require(matrixStats)
+require(MASS)
+require(prokounter)
+require(breakaway)
+
+source('~/Documents/research/StatisticalAnalysisProjects/NSPSU/utils_prokounter.R')
+source('~/Documents/research/intensityBias/src/otherDivsCalls.R')
+```
+
+
+Chao1 look
+```{r}
+
+dfs <-list()
+
+dfs$psu.fst99 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_99_SILVA132.RDS")
+dfs$psu.fst97 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_97_SILVA132.RDS")
+dfs$dada2 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime2_Jan2021/PIH_CSF_First100_Dada2_SILVA132.RDS")
+
+pbac.indx <- grep( "Paenibacillus", fData( dfs$psu.fst99 )$Genus )
+obj.pbac <- dfs$psu.fst99[pbac.indx,]
+obj <- dfs$psu.fst99
+
+
+visChao1 <- function(obj.mat, cols){
+  und.chao1 <- apply( obj.mat, 2, function(x){
+    f <- table(x)
+    (f["1"]^2)/(2*f["2"]  )
+  } )
+  sobs <- colSums( obj.mat>0 )
+  tot <- colSums( obj.mat )
+  chao1 <- sobs + und.chao1
+  op <- par(mfrow=c(1,3), pty='s')
+  plot( log(und.chao1) ~ log(tot), col = cols )
+  plot( log(sobs) ~ log(tot), col = cols )
+  plot( log(chao1) ~ log(tot), col = cols )
+  par(op)
+  list( "chao1"=chao1,
+        "sobs"=sobs,
+        "und.chao1"=und.chao1,
+        "tot"=tot
+        )
+}
+
+#specifically for the entire sample
+cc <- getColsForFactors( gr = factor( pData(obj)$Sample_Def, levels = c("LabControl","CaseControl","Case") ), set = "Paired" )
+c1 <- visChao1(  exprs(obj), cc$cols )
+
+#specifically for pbac genus
+cc <- getColsForFactors( gr = factor( pData(obj.pbac)$Sample_Def, levels = c("LabControl","CaseControl","Case") ), set = "Paired" )
+c1.pbac <- visChao1(  exprs(obj.pbac), cc$cols )
+
+
+op <- par(mfrow=c(2,2), pty='s')
+# the chao adjusted for erroneous singletons; same behavior, and highly correlated with chao1
+cc16 <- apply( exprs(obj), 2, chiuchao16 )
+plot( log( cc16 ) ~ log(colSums( exprs(obj) )), xlab = "Log Sample Depth",ylab = "Log Chiu-Chao 16" , col = cc$cols )
+plot( log(cc16) ~ log( c1$chao1 ) )
+cor( cc16, c1$chao1, use="pairwise.complete.obs" )
+
+# here things go undefined because of cmputing f[3] and f[4] 
+cc16.pb <- apply( exprs(obj.pbac), 2, chiuchao16 )
+plot( log( cc16.pb ) ~ log(colSums( exprs(obj.pbac) )), xlab = "Log Sample Depth",ylab = "Log Chiu-Chao 16", col = cc$cols  )
+plot( log(cc16.pb) ~ log( c1.pbac$chao1 ) )
+par(op)
+
+```
+
+
+Simulation behavior in the presence of false discoveries
+```{r}
+ssim <- function(pm,tau=10^(seq(2,7,by=.25))){
+  do.call(cbind, lapply( tau, function(t) rmultinom(n=1,size=t,prob=pm) ) )
+}
+
+#pi is pm
+#length(alpha) is J-1
+#gm is equivalent to eta
+ssim3 <- function(pm, tau=10^(seq(2,7,by=.25)), gm=1e-2, NLARGE =1000, alpha=1/seq(NLARGE) ){
+  ori <- do.call(cbind, lapply( tau, function(t){
+    y <- rmultinom( n=1, size=t, prob=pm )   
+    ywf <- unlist( lapply( seq_along(pm), function(i){
+      x <- pm[i]
+      tt <- y[i]
+      if(y[i]>0){
+        tryCatch({
+          al <- alpha
+          al[1] <- (1-gm)*x
+          al[2:length(al)] <-gm*x*al[1:(length(al)-1)] 
+          #pr <- rdiric( 1, shape=al )
+          #pr[ is.na(pr)] <- 0
+          pr <- al
+          rmultinom( n=1, size = tt, prob = pr )    
+        },error=function(e){
+          al <- 0*alpha
+          al[1] <- y[i]
+          al
+        })
+      } else {
+        0*alpha
+      }
+      } ) )
+  })  )
+  
+  J <- length(alpha)-1
+  EJtildeN <- J- sapply( tau, function(tot){
+    sum(  sapply( seq(J), function(j) exp( -sum(tot*gm*pm*alpha[j]) ) ) )
+  } )
+  I <- length(pm)
+  EItildeN <- I - sapply( tau, function(tot){
+    sum( sapply( seq(I), function(i){
+      exp( -tot*(1-gm)*pm[i])  
+    } )  ) 
+  } )
+  
+  ori <- ori[ which( rowSums( ori )>0 ), ]
+  
+  list( "counts"=ori,
+        "EJtildeN"=EJtildeN,
+        "EItildeN"=EItildeN
+        )
+  
+}
+
+tau<-10^(seq(2,7,by=.25))
+pbac.pm <- rowMeans(sweep( exprs(obj.pbac), 2, colSums( exprs(obj.pbac) ), "/" ), na.rm = TRUE)
+dat <- ssim( pbac.pm, tau )
+
+dat.wnoise <- ssim3( pbac.pm, gm=.00001 )
+visChao1( dat.wnoise$counts,cols = rep( "red", ncol(dat.wnoise$counts) ) )
+plot( dat.wnoise$EJtildeN ~ log(colSums(dat.wnoise$counts))  )
+plot( dat.wnoise$EItildeN ~ log(colSums(dat.wnoise$counts))  )
+
+
+# when false discoveries have asymptoted before true discoveries
+dat.wnoise <- ssim3( pbac.pm, gm=.01 )
+visChao1( dat.wnoise$counts,cols = rep( "red", ncol(dat.wnoise$counts) ) )
+plot( dat.wnoise$EJtildeN ~ log(colSums(dat.wnoise$counts))  )
+plot( dat.wnoise$EItildeN ~ log(colSums(dat.wnoise$counts))  )
+
+
+dat.wnoise <- ssim3( pbac.pm, gm=.25 )
+visChao1( dat.wnoise$counts,cols = rep( "red", ncol(dat.wnoise$counts) ) )
+plot( dat.wnoise$EJtildeN ~ log(colSums(dat.wnoise$counts))  )
+plot( dat.wnoise$EItildeN ~ log(colSums(dat.wnoise$counts))  )
+
+
+dat.wnoise <- ssim3( pbac.pm[1:20]/sum(pbac.pm[1:20]), gm=.25, NLARGE = 50 )
+visChao1( dat.wnoise$counts,cols = rep( "red", ncol(dat.wnoise$counts) ) )
+plot( dat.wnoise$EJtildeN ~ log(colSums(dat.wnoise$counts)), ylab = bquote( E~tilde(J)~"(N)" ) )
+plot( dat.wnoise$EItildeN ~ log(colSums(dat.wnoise$counts)),ylab= bquote( E~tilde(I)~"(N)" ) )
+
+```
+
+
+Crossing over of accumulation curves can still be a problem with asymptotic estimators. 
+```{r}
+comm1.p <- pbac.pm
+comm2.p <- rep(pbac.pm[1],length(pbac.pm))/(length(pbac.pm)*pbac.pm[1])
+
+s1 <- ssim( comm1.p )
+s2 <- ssim( comm2.p )
+
+vc1 <- visChao1( s1,cols = rep( "red", ncol(dat.wnoise$counts) ) )
+vc2 <- visChao1( s2,cols = rep( "red", ncol(dat.wnoise$counts) ) )
+
+require(vegan)
+ve1 <- vegan::estimateR( t(s1) )[2:3,] #get chao1 and chao1.se
+ve2 <- vegan::estimateR( t(s2) )[2:3,]
+plot( ve1[1,] ~ log(vc1$tot)  ); arrows( log(vc1$tot), ve1[1,]+1.96*ve1[2,], 
+                                         log(vc1$tot), ve1[1,]-1.96*ve1[2,], 
+                                         code = 0
+                                         )
+points( ve2[1,] ~ log(vc2$tot), col ='red'  ); 
+arrows( log(vc2$tot), ve2[1,]+1.96*ve2[2,], 
+        log(vc2$tot), ve2[1,]-1.96*ve2[2,], code = 0 )
+
+```
+
+
+
+Further look of simulations with other tools
+```{r}
+k <- vegan::estimateR( t(dat) )
+k.wnoise <- vegan::estimateR( t(dat.wnoise) )
+
+
+#pdf(file="./results/images/Chao1SampledRichenssWithAndWithoutFalseDiscoveries.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(2,2), pty='s')
+plot( k[2,] ~ log( tau ), xlab = "Log Sampling Depth", ylab = "Chao1" )
+abline(h=length(paenipm) )
+plot( colSums( dat>0 ) ~ log(tau), xlab="Log Sampling Depth", ylab = "Sampled Richness"  ) 
+
+plot( k.wnoise[2,] ~ log( tau ), xlab = "Log Sampling Depth", ylab = "Chao1" )
+abline(h=length(paenipm) )
+plot( colSums( dat.wnoise>0 ) ~ log(tau), xlab="Log Sampling Depth", ylab = "Sampled Richness"  ) 
+#dev.off()
+par(op)
+
+
+#install.packages("iNEXT")
+library(iNEXT)
+library (ggplot2) 
+i <- 10
+j <- 11
+zz <- list( "one"=dat.wnoise[dat.wnoise[,i]>0,i], "two"= dat.wnoise[dat.wnoise[,j]>0,j] )
+out <- iNEXT(zz, q=0, datatype ="abundance")
+ggiNEXT(out)
+
+
+```
+
+

@@ -1,0 +1,350 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+Load some libraries
+---
+```{r}
+require(metagenomeSeq)
+require(matrixStats)
+require(metagenomeSeq)
+require(portra50)
+require(matrixStats)
+require(MASS)
+require(prokounter)
+
+source('~/Documents/research/StatisticalAnalysisProjects/NSPSU/utils_prokounter.R.R')
+```
+
+Load data
+```{r}
+dfs <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+```
+
+```{r}
+
+getPseudo <- function(obj){
+    fi <- grep( "Pseudomonas", fData(obj)$Genus )  
+    sb <- obj[fi,,drop=FALSE]
+    sb[ which(rowSums(exprs(sb)) > 0 ), ,drop=FALSE]
+}
+
+getGenus <- function(obj, gnme="Pseudomonas"){
+    fi <- grep( gnme, fData(obj)$Genus )  
+    sb <- obj[fi,,drop=FALSE]
+    sb[ which(rowSums(exprs(sb)) > 0 ), ,drop=FALSE]
+  }
+
+getRPA <- function(dfs, gnme="Pseudomonas"){
+  rpa <- do.call(rbind, lapply( names(dfs), function(methd){
+    obj <- dfs[[methd]]
+    tot.tax <- colSums(exprs(obj)>0)
+    ps <- getGenus(obj, gnme)
+    genus.tot.tax <- colSums( exprs(ps)>0 )
+    recov <- colSums( exprs(ps) )
+    inpt <- pData( ps )$ncells
+    data.frame( "pa"=recov,
+                "dom.cnt"= exprs(ps)[which.max(rowSums(exprs(ps))),],
+                "genus.tot.tax"=genus.tot.tax,
+                "tot.tax"=tot.tax,
+                "sdepth"=colSums(exprs(obj)),
+                "np"=colSums( exprs( ps )>0 ),
+                "ncells"=pData(ps)$ncells,
+                "cycles"=pData(ps)$cycles,
+                "methd"= methd
+    )
+  }) )
+  
+}
+```
+
+```{r}
+ps <- getPseudo( dfs$FST.99  )
+RPA <- getRPA( dfs, gnme="Pseudomonas" )
+
+require(gss)
+df1 <- RPA[,c("genus.tot.tax", "pa", "methd")]
+df1$pa <-log2(df1$pa)
+df1$genus.tot.tax <-log2(df1$genus.tot.tax)
+df1 <- df1[which( is.finite( df1$genus.tot.tax ) & is.finite(df1$pa) ),]
+fit <- gss::ssanova( genus.tot.tax ~ pa*methd, data = df1 )
+pr <- data.frame(  "pa"=c(seq(0,max(df1$pa)), max(df1$pa) ) )
+z <- do.call(rbind, lapply( c("FST.99","FST.97","Dada2"), function(x) cbind(pr, "methd"=x) ))
+pr <- predict( fit, newdata= z, se.fit=TRUE ) 
+
+
+# Reconstructed taxa along pars
+pdf(file="./results/images/PSEUDO.AMP.pdf", useDingbats = FALSE)
+op <- par(mfrow=c(1,3), pty='s')
+for( m in names(dfs) ){
+  ri <-which( RPA$methd == m )
+  boxplot( 
+    RPA$np[ri] ~ RPA$cycles[ri], las=2, main = m
+    )
+  mtext( "Reconstructed Pseudomonas taxa", side=2, line = 3.5, cex=1 )
+  mtext( "Amplification Cycles", side=1, line = 6, cex=1 )
+}
+dev.off()
+par(op)
+
+pdf(file="./results/images/PSEUDO.INP.pdf", useDingbats = FALSE)
+op <- par(mfrow=c(1,3), pty='s')
+for( m in names(dfs) ){
+  ri <-which( RPA$methd == m )
+  boxplot( 
+    RPA$np[ri] ~ RPA$ncells[ri], las=2, main = m
+    )
+  mtext( "Reconstructed Pseudomonas taxa", side=2, line = 3.5, cex=1 )
+  mtext( "Input Cells", side=1, line = 6, cex=1 )
+}
+dev.off()
+par(op)
+
+
+
+pdf(file="./results/images/PSEUDO.RECOV.AB.pdf", useDingbats = FALSE)
+op <- par(mfrow=c(1,2), pty='s')
+cc <- getColsForFactors( gr=factor(df1$methd, levels = c("FST.99","FST.97", "Dada2")), set = "Paired" )
+plot( df1$genus.tot.tax  ~ df1$pa, col = cc$cols, bty='n', xlab=bquote(log[2]~"Recovered  Abundance"), ylab = bquote( log[2]~"Number of Pseudomonas discoveries" ) )
+legend( "topleft", cc$map[,2], fill=cc$map[,1], bty="n" )
+cc <- getColsForFactors( gr=factor(z$methd, levels = c("FST.99","FST.97", "Dada2")), set = "Paired" )
+for( k in seq(nrow( cc$map )) ){
+  lab <- cc$map[k,2]
+  id <- which( z$methd == lab )
+  lines( pr$fit[id] ~ z$pa[id],col=cc$map[k], cex=.25, lwd=1.5 )  
+  lines( pr$fit[id]+1.96*pr$se.fi[id] ~ z$pa[id],col=cc$map[k], cex=.25, lwd=.5 )  
+  lines( pr$fit[id]-1.96*pr$se.fit[id] ~ z$pa[id],col=cc$map[k], cex=.25, lwd=.5 )  
+}
+dev.off()
+par(op)
+```
+
+
+
+With input tracking pseudo only. 
+```{r}
+
+ps <- getPseudo( dfs$FST.99  )
+
+getRPA.input <- function(dfs, gnme="Pseudomonas"){
+  rpa <- do.call(rbind, lapply( names(dfs), function(methd){
+    obj <- dfs[[methd]]
+    tot.tax <- colSums(exprs(obj)>0)
+    ps <- getGenus(obj, gnme)
+    recov <- colSums( exprs(ps) )
+    inpt <- pData( ps )$ncells
+    
+    fits<- apply( exprs(ps), 1, function(x) glm(x ~ log(pData(ps)$ncells), family="poisson" ) )
+    res <- sapply(fits, function(x){
+      if(x$converged ){
+        #print(x)
+        summary( x )$coef[2,c(1,4)]
+      } else {
+        c(NA,NA)
+      }
+    } )
+    
+    inpt.tax <- which( (p.adjust( res[2,], "BH" ) < .1) & (res[1,]>0) )
+    stopifnot(length(inpt.tax)>0)
+    ps <- ps[inpt.tax,,drop=FALSE]
+    genus.tot.tax <- colSums( exprs(ps)>0 )
+    
+    data.frame( "pa"=recov,
+                "dom.cnt"= exprs(ps)[which.max(rowSums(exprs(ps))),],
+                "genus.tot.tax"=genus.tot.tax,
+                "tot.tax"=tot.tax,
+                "sdepth"=colSums(exprs(obj)),
+                "np"=colSums( exprs( ps )>0 ),
+                "ncells"=pData(ps)$ncells,
+                "cycles"=pData(ps)$cycles,
+                "methd"= methd
+    )
+  }) )
+  
+}
+
+
+ps <- getPseudo( dfs$FST.99  )
+RPA <- getRPA.input( dfs, gnme="Pseudomonas" )
+
+require(gss)
+df1 <- RPA[,c("genus.tot.tax", "pa", "methd")]
+df1$pa <-log2(df1$pa)
+df1$genus.tot.tax <-log2(df1$genus.tot.tax)
+df1 <- df1[which( is.finite( df1$genus.tot.tax ) & is.finite(df1$pa) ),]
+fit <- gss::ssanova( genus.tot.tax ~ pa*methd, data = df1 )
+pr <- data.frame(  "pa"=c(seq(0,max(df1$pa)), max(df1$pa) ) )
+z <- do.call(rbind, lapply( c("FST.99","FST.97","Dada2"), function(x) cbind(pr, "methd"=x) ))
+pr <- predict( fit, newdata= z, se.fit=TRUE ) 
+
+
+
+# Reconstructed taxa
+
+pdf(file="./results/images/INPUT_PSEUDO.J.INP.AMP.pdf",useDingbats = FALSE, paper = "a4r" )
+op <- par(mfrow=c(1,3), pty='s')
+for( m in names(dfs) ){
+  ri <-which( RPA$methd == m )
+  boxplot( 
+    RPA$np[ri] ~ paste( RPA$ncells, RPA$cycles, sep=">"  )[ri], las=2, main = m, cex.axis =.75
+    )
+  abline( v=c(6.5, 6.5+5, 6.5+5+6, 6.5+5+2*6) )
+  mtext( "Reconstructed Pseudomonas taxa", side=2, line = 3, cex=1 )
+  mtext( "Input Cells > Amplification Cycles", side=1, line = 6, cex=1 )
+}
+dev.off()
+par(op)
+
+# Reconstructed taxa along pars
+pdf(file="./results/images/INPUT_PSEUDO.AMP.pdf", useDingbats = FALSE)
+op <- par(mfrow=c(1,3), pty='s')
+for( m in names(dfs) ){
+  ri <-which( RPA$methd == m )
+  boxplot( 
+    RPA$np[ri] ~ RPA$cycles[ri], las=2, main = m
+    )
+  mtext( "Reconstructed Pseudomonas taxa", side=2, line = 3.5, cex=1 )
+  mtext( "Amplification Cycles", side=1, line = 6, cex=1 )
+}
+dev.off()
+par(op)
+
+pdf(file="./results/images/INPUT_PSEUDO.INP.pdf", useDingbats = FALSE)
+op <- par(mfrow=c(1,3), pty='s')
+for( m in names(dfs) ){
+  ri <-which( RPA$methd == m )
+  boxplot( 
+    RPA$np[ri] ~ RPA$ncells[ri], las=2, main = m
+    )
+  mtext( "Reconstructed Pseudomonas taxa", side=2, line = 3.5, cex=1 )
+  mtext( "Input Cells", side=1, line = 6, cex=1 )
+}
+dev.off()
+par(op)
+
+
+
+pdf(file="./results/images/INPUT_PSEUDO.RECOV.AB.pdf", useDingbats = FALSE)
+op <- par(mfrow=c(1,2), pty='s')
+cc <- getColsForFactors( gr=factor(df1$methd, levels = c("FST.99","FST.97", "Dada2")), set = "Paired" )
+plot( df1$genus.tot.tax  ~ df1$pa, col = cc$cols, bty='n', xlab=bquote(log[2]~"Recovered  Abundance"), ylab = bquote( log[2]~"Number of Pseudomonas discoveries" ) )
+legend( "topleft", cc$map[,2], fill=cc$map[,1], bty="n" )
+cc <- getColsForFactors( gr=factor(z$methd, levels = c("FST.99","FST.97", "Dada2")), set = "Paired" )
+for( k in seq(nrow( cc$map )) ){
+  lab <- cc$map[k,2]
+  id <- which( z$methd == lab )
+  lines( pr$fit[id] ~ z$pa[id],col=cc$map[k], cex=.25, lwd=1.5 )  
+  lines( pr$fit[id]+1.96*pr$se.fi[id] ~ z$pa[id],col=cc$map[k], cex=.25, lwd=.5 )  
+  lines( pr$fit[id]-1.96*pr$se.fit[id] ~ z$pa[id],col=cc$map[k], cex=.25, lwd=.5 )  
+}
+dev.off()
+par(op)
+
+```
+
+
+
+Low frequencies
+
+```{r}
+
+ps <- getPseudo( dfs$FST.97 )
+ps <- ps[,which( colSums(exprs(ps))>0 )]
+l2ra <-log2(colSums(exprs(ps)))
+o <- order( l2ra )
+pso <- ps[,o]
+l2ra <- l2ra[o]
+st <- which( colSums( exprs(pso[,1]) ) > 0 )
+sample <- colnames(pso)
+rres <- lapply( seq(ncol(pso)), function(j) {
+  y <- exprs(pso[,j])
+  f <- table(y)
+  frat <- f/f["1"]
+  if( length(frat) >0 ){
+    df <- data.frame( "frat"=frat,  "l2ra"=l2ra[j], "sample"=sample[j] )  
+  } else {
+    df <- data.frame( NA, NA, NA )
+  }
+  df
+} )
+
+
+
+
+
+pdf( file="./results/images/lowFrequencyContribution_Pseudo_SUPP_NET_fst97.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(1,1), pty='s')
+hist( log2(c( exprs(pso))), nc=100, xlab = "Log2 Abundance", main =""  ) # only non-dominant!!
+dev.off()
+par(op)
+
+
+ps <- getPseudo( dfs$FST.99 )
+ps <- ps[,which( colSums(exprs(ps))>0 )]
+l2ra <-log2(colSums(exprs(ps)))
+o <- order( l2ra )
+pso <- ps[,o]
+l2ra <- l2ra[o]
+st <- which( colSums( exprs(pso[,1]) ) > 0 )
+sample <- colnames(pso)
+rres <- lapply( seq(ncol(pso)), function(j) {
+  y <- exprs(pso[,j])
+  #sti <- which( y > 0 )
+  #fi <- setdiff( sti, st )
+  #f <- table( y[fi] )
+  f <- table(y)
+  frat <- f/f["1"]
+  if( length(frat) >0 ){
+    df <- data.frame( "frat"=frat,  "l2ra"=l2ra[j], "sample"=sample[j] )  
+  } else {
+    df <- data.frame( NA, NA, NA )
+  }
+  df
+} )
+
+pdf( file="./results/images/lowFrequencyContribution_Pseudo_SUPP_NET_fst99.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(1,1), pty='s')
+hist( log2(c( exprs(pso))), nc=100, xlab = "Log2 Abundance", main =""  ) # only non-dominant!!
+dev.off()
+par(op)
+
+
+
+pdf( file="./results/images/lowFrequencyContribution_Pseudo_SUPP_NCELLS_fst97.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(2,3), pty='s')
+znet <- do.call(rbind, rres)
+pd <- pData(pso)[znet$sample,]
+for( i in seq( 2,7 ) ){
+  h <- subset( znet, frat.y==i )
+  cc <- getColsForFactors( factor(pd$ncells,levels=sort(unique(pd$ncells)) ), lset="Set3" )
+  plot( log2(1/frat.Freq) ~ l2ra, data=h, ylab = bquote(log[2]~f[1]/f[.(i)]), 
+        xlab = bquote( log[2]~"Pseudomonas Recovered Abundance" ), col =cc$cols
+        )  
+  if(i==2)
+    legend( "topleft", cc$map[,2], fill=cc$map[,1], bty="n" )
+}
+dev.off()
+par(op)
+
+
+pdf( file="./results/images/lowFrequencyContribution_Pseudo_SUPP_CYCLES_fst97.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(2,3), pty='s')
+znet <- do.call(rbind, rres)
+pd <- pData(pso)[znet$sample,]
+for( i in seq( 2,7 ) ){
+  h <- subset( znet, frat.y==i )
+  cc <- getColsForFactors( factor(pd$cycles,levels=sort(unique(pd$cycles)) ), lset="Set3" )
+  plot( log2(1/frat.Freq) ~ l2ra, data=h, ylab = bquote(log[2]~f[1]/f[.(i)]), 
+        xlab = bquote( log[2]~"Pseudomonas Recovered Abundance" ), col =cc$cols
+        )  
+  if(i==2)
+    legend( "topleft", cc$map[,2], fill=cc$map[,1], bty="n" )
+}
+dev.off()
+par(op)
+
+
+
+```

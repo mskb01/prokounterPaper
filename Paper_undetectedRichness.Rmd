@@ -1,0 +1,70 @@
+---
+title: "R Notebook" 
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+Undetected richness estimators
+
+```{r}
+getGenus <- function(obj, gnme="Pseudomonas", genuslab="Genus"){
+    fi <- grep( gnme, fData(obj)[[genuslab]] )  
+    sb <- obj[fi,,drop=FALSE]
+    sb[ which(rowSums(exprs(sb)) > 0 ), ,drop=FALSE]
+  }
+
+```
+
+```{r}
+getChao1Undet <- function(genusobj, ... ){
+  z <- apply( exprs(genusobj), 2, function(x){
+    tx <- table( x )
+    v <- (tx["1"]^2)/(2*tx["2"])
+    if(is.na(v)){
+      v <- tx["1"]*(tx["1"]-1)/(2*(tx["2"]+1))
+    }
+    v
+  } )
+  
+  x <- colSums( exprs(genusobj) ) 
+  plot( log(z) ~ log(x) , xlab = "Log Genus recovered abundance", ylab = "Log Chao1 undetected richness estimate", ... )  
+  z  
+  
+}
+```
+
+Pseudomonas
+```{r}
+dfs <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+pdf( file="./results/images/chao1undet_Pseudomonas.pdf" )
+op <- par(mfrow=c(1,2), pty='s')
+
+ps <- getGenus( dfs$FST.99, gnme = "Pseudomonas" )
+z <- getChao1Undet( ps, col= 'blue', main = "FST.99" )
+ps <- getGenus( dfs$FST.97, gnme = "Pseudomonas" )
+z <- getChao1Undet( ps, col= 'blue', main = "FST.97" )
+
+par(op)
+dev.off()
+
+
+```
+
+PIH100
+```{r}
+psu <-list()
+psu$fst99 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_99_SILVA132.RDS")
+psu$fst97 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_97_SILVA132.RDS")
+
+pdf( file="./results/images/chao1undet_pihpbac.pdf" )
+op <- par(mfrow=c(1,2), pty='s')
+ps <- getGenus( psu$fst99, gnme = "Paenibacillus", genuslab = "Genus" )
+z <- getChao1Undet( ps, col= 'blue', main = "FST.99" )
+ps <- getGenus( psu$fst97, gnme = "Paenibacillus", genuslab="Genus" )
+z <- getChao1Undet( ps, col= 'blue', main = "FST.97" )
+
+par(op)
+dev.off()
+
+```

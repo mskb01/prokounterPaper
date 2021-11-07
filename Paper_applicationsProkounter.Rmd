@@ -1,0 +1,443 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+We apply Prokounter to a few datasets. 
+```{r}
+require(metagenomeSeq)
+require(matrixStats)
+require(metagenomeSeq)
+require(portra50)
+require(matrixStats)
+require(MASS)
+require(prokounter)
+require(breakaway)
+
+source('~/Documents/research/StatisticalAnalysisProjects/NSPSU/utils_prokounter.R')
+source('~/Documents/research/intensityBias/src/otherDivsCalls.R')
+
+pltProkounterDatForGenus <- function( pkobj, genusLabel, esetobj, pdatColLabel="Sample_Def", bplt=TRUE  ) {
+  so <- subset( pkobj$df, (g== genusLabel) & ( samples %in% colnames(esetobj))  ); so <- so[ order( so$lr ), ]
+  grp <- pData( esetobj )[ as.character(so$samples), ][[pdatColLabel]];
+  if(!is.factor(grp))
+    grp <- factor( as.character(grp) )
+  cc <- getColsForFactors( gr=grp, set="Paired", m=10 )
+  stopifnot(length(grp)==nrow(so))
+  
+  if(bplt){
+    boxplot( c(lm) ~grp, col = cc$map[,1] , las=2, data = so, ylab = "Log Observed Richness")
+  }
+  
+  plot( lm~lr, data=so, col = cc$cols, 
+        xlab = "Log Recovered Abundance", ylab = "Log Observed Richness", main = genusLabel ); 
+  points( ltv~lr, data = so, col ='gray', cex=.5 , type='o')
+  legend( "topleft", cc$map[,2], fill=cc$map[,1], bty="n"  )
+  legend( "bottomright", expression(kappa + f[R](.) ) , col = "gray", pch=19, lty=1, bty="n" )
+  
+  pred <- predict( pkobj$fit, include=c("lr:g"), newdata=so ) 
+  plot( pred ~ so$lr, xlab = "Log Recovered Abundance", ylab = expression(f[GR](.)), col = cc$cols, type='o' )
+    
+}
+
+extrProkSigGenusEffects <- function(pkobj){
+  gs <- unique( as.character(pkobj$df$g[  which( pkobj$df$gtv.sigs==1 ) ]) )
+  indx <- match( gs, as.character(pkobj$df$g) )
+  df <- data.frame("g"=gs, "effect"=pkobj$df$gtv[indx] )
+  df[ order( abs(df$effect ), decreasing=TRUE ), ]
+}
+
+pred.plot <- function(df, g2ft, fit, plt.knots=FALSE, alpha=.1, methd="ss",... ){
+  library(scales)
+  
+  if(methd=="ss"){
+    lrvec <- seq(min(df$lr), max(df$lr), .1)
+    newd = data.frame( "lr"= rep(lrvec,
+                                 each=length(g2ft) ),
+                       "g"= rep( g2ft,
+                                 each=length( lrvec)
+                       )
+    )
+    ng <- length( df$g )
+    cc <- getColsForFactors( factor(df$g), ... )
+    trans.cols <- scales:::alpha( cc$cols, alpha=alpha )
+    ltv <- predict( fit, newdata=newd[,"lr",drop=FALSE], include=c( "1", "lr"), se.fit=TRUE);
+    plot( df$lm ~ df$lr, col = trans.cols, xlab = "Log2 Recovered Abundance", ylab = "Log2 Num. Taxa", pch=19 )
+    #plot( df$lm ~ df$lr, col = cc$cols, xlab = "Log2 Recovered Abundance", ylab = "Log2 Num. Taxa" )
+    #smoothScatter( df$lm ~ df$lr, col = cc$cols, xlab = "Log2 Recovered Abundance", ylab = "Log2 Num. Taxa" )
+    abline( h=0 )
+    o <- order( newd$lr)
+    lines( ltv$fit[o] ~ newd$lr[o], col = 'red', cex=.5 )
+    lines( (ltv$fit[o]+1.96*ltv$se[o]) ~ newd$lr[o], col = 'red', cex=.5, lty=2 )
+    lines( (ltv$fit[o]-1.96*ltv$se[o]) ~ newd$lr[o], col = 'red', cex=.5, lty=2 )
+    if(plt.knots)
+      points( df$lm[fit$id.basis] ~ df$lr[ fit$id.basis ], pch=23, col = 'blue', bg='blue' )
+  }
+  
+  else {
+    lrvec <- seq(min(df$lr), max(df$lr), .1)
+    newd = data.frame( "lr"= lrvec )
+    ltv <- predict( fit, newdata=newd,se=TRUE ); 
+    cc <- getColsForFactors( factor(df$g), ... )
+    trans.cols <- scales:::alpha( cc$cols, alpha=alpha )
+    plot( df$lm ~ df$lr, col = trans.cols, xlab = "Log2 Recovered Abunadnce", ylab = "Log2 Num. Taxa", pch=19 )
+    abline( h=0 )
+    o <- order( newd$lr )
+    lines( ltv$fit[o] ~ newd$lr[o], col = 'red', cex=.5 )
+    lines( (ltv$fit[o]+1.96*ltv$se[o]) ~ newd$lr[o], col = 'red', cex=.5, lty=2 )
+    lines( (ltv$fit[o]-1.96*ltv$se[o]) ~ newd$lr[o], col = 'red', cex=.5, lty=2 )
+  }
+}
+```
+
+
+
+#Time Series
+Time series study: Pre-infection, infection, post-infection
+
+```{r}
+alm.AF <- readRDS( file="./data/alm.AF.RDS" )
+des <- model.matrix( ~group , data=pData(alm.AF) )
+
+# here group 1 is pre-infection, group 2 infection, and group 3 post-infection. 
+#group <= 150 days #pre-infection, defined according to the original paper
+#(group >=151) & (group <=159) #infection
+#(group > 159)#post-infection
+
+# -- sample wide
+almpk <- prokounter::getProkounterTrends( exprs( alm.AF ), genus=as.character(fData(alm.AF)$taxonomy6), fit.proc="ss", plt=TRUE )
+alm.sw <- prokounter::getDRforSampleGroups( pkobj = almpk, 
+                                              des = des, depth.inc = FALSE, fg.inc = TRUE ); 
+alm.sw$tab
+
+# -- genera specific
+alm.gw1 <- prokounter::getDRforGenera( almpk, des = des ); 
+alm.gw1$tab$desgroup2[ which(p.adjust( alm.gw1$tab$desgroup2[,4], "BH" ) < .1), ]
+alm.gw1$tab$desgroup3[ which(p.adjust( alm.gw1$tab$desgroup3[,4], "BH" ) < .1), ]
+
+# -- collection specific
+coll <- data.frame( "genus"=fData(alm.AF)$taxonomy6, "phylum"=fData(alm.AF)$taxonomy2  )
+alm.gw1 <- prokounter::getDRforTaxaCollection( pkobj = almpk, 
+                                               des = des, 
+                                               genus2collection = coll); 
+alm.gw1$tab$desgroup2[ which(p.adjust( alm.gw1$tab$desgroup2[,4], "BH" ) < .1), ]
+alm.gw1$tab$desgroup3[ which(p.adjust( alm.gw1$tab$desgroup3[,4], "BH" ) < .1), ]
+
+
+#visuzalizing some effects
+op <- par(mfrow=c(1,2), pty='s')
+ep <- extrProkSigGenusEffects( almpk )
+pltProkounterDatForGenus( pkobj = almpk, genusLabel="g__Oscillospira", esetobj = alm.AF, pdatColLabel = "group", bplt=TRUE )
+pltProkounterDatForGenus( pkobj = almpk, genusLabel="g__Bacteroides", esetobj = alm.AF, pdatColLabel = "group", bplt=TRUE )
+pltProkounterDatForGenus( pkobj = almpk, genusLabel="g__Pseudomonas", esetobj = alm.AF, pdatColLabel = "group", bplt=TRUE )
+
+others <- getSwideInferences( obj=alm.AF, X=des, adj=TRUE )
+others$tab
+
+
+# loess and ss in this study
+op <- par(mfrow=c(1,2), pty='s')
+almpk <- prokounter( exprs( alm.AF ), genus=as.character(fData(alm.AF)$taxonomy6), fit.proc="lo", plt=TRUE)
+almpk <- prokounter::getProkounterTrends( exprs( alm.AF ), 
+                                          genus=as.character(fData(alm.AF)$taxonomy6), 
+                                          fit.proc="ss")
+par(op)
+
+#some further interesting approaches from the literature
+others <- getSwideInferences( obj=alm.AF, X=des )
+others$tab
+
+rm(almpk, alm.sw, alm.gw1, alm.AF, others, des)
+```
+
+
+#Wastewater
+```{r}
+load( file="./data/wastewater/wastewater.rdata" ) #loads wastewaterMRobj
+ww <- convertMRtoES(wastewaterMRobj)
+stfs <-  c("1_Influent", "Effluent", "Before_UV", "After_UV", "Pond",  "Inlet_pumphouse"  )
+si <- which( pData( ww )$Sample_Type %in% stfs )
+so <- ww[,si]
+pData(so)$Sample_Type <- factor( as.character(pData(so)$Sample_Type), levels=stfs )
+wwpk <- prokounter::getProkounterTrends(exprs(so), genus=as.character(fData(so)$genus), fit.proc = "ss", plt=TRUE )
+des <- model.matrix( ~Sample_Type, data=pData(so) )
+
+# -- sample wide 
+sw <- prokounter::getDRforSampleGroups( pkobj = wwpk, des = des )
+sw$tab
+
+#genus specific , effluent 
+wwg <- prokounter::getDRforGenera( pkobj = wwpk, des = des )
+fieff <- wwg$tab$desSample_TypeEffluent
+fieff[which( p.adjust( fieff[,4] , "BH" ) < .1 ),]
+
+
+#some further interesting approaches from the literature
+sws <- getSwideInferences( obj = so,X = des)
+sws$chao1$table
+sws$ace$table
+sws$breakaway$table
+
+tt <- getWLSAsympt( chats.mat=sws$chats.mat, ses.mat=sws$chats.se, X=des )
+tt$chao1
+tt$ace
+tt$breakaway
+
+rm( wwpk, wwg, sws, so )
+
+
+```
+
+
+
+#Pseudomonas
+
+```{r}
+dfs <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+des97 <- model.matrix( ~log(ncells)+cycles, data=pData(dfs$FST.97) )
+
+# I. Sample wide inferences. 
+# -- FST97
+pk97 <- prokounter::getProkounterTrends( exprs( dfs$FST.97 ), genus = fData(dfs$FST.97)$Genus, fit.proc = "ss", plt=TRUE )
+
+sw1.97 <- prokounter::getDRforSampleGroups( pkobj = pk97, des=des97, fg.inc=TRUE )
+sw1.97$tab
+pltProkounterDatForGenus( pkobj = pk97, genusLabel = "Pseudomonas", esetobj = dfs$FST.97, pdatColLabel = "cycles", bplt = TRUE )
+
+pdf( file="./results/fRfRG_IllustrationPseudomonasFST97_ncells.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(1,3),pty='s')
+pltProkounterDatForGenus( pkobj = pk97, genusLabel = "Pseudomonas", esetobj = dfs$FST.97, pdatColLabel = "ncells", bplt = TRUE )
+dev.off()
+
+
+# II. genus specific inferences with FST99
+gw97 <- prokounter::getDRforGenera( pkobj = pk97, des=des97 )
+ficells <- gw97$tab$`deslog(ncells)`; ficells[ p.adjust( ficells[,4], "BH" ) < .1,  ]
+ficycs <- gw97$tab$descycles; ficycs[ p.adjust( ficycs[,4], "BH" ) < .1,  ]
+op <- par(mfrow=c(1,3),pty='s')
+pltProkounterDatForGenus( pkobj = pk97, genusLabel = "Cutibacterium", esetobj = dfs$FST.97, pdatColLabel = "ncells", bplt = TRUE )
+
+
+# III. Taxa collections with FST99
+gs <- unique( as.character(fData( dfs$FST.97 )$Genus))
+indx <-match(gs, fData(dfs$FST.97)$Genus ) 
+collection <- data.frame("g"=fData( dfs$FST.97 )$Genus[indx], "order"=fData(dfs$FST.97)$Order[indx] )
+tw97 <- prokounter::getDRforTaxaCollection( pkobj=pk97, genus2collection = collection, des=des97, fg.inc=TRUE )
+ficells <- tw97$tab$`deslog(ncells)`; ficells[ p.adjust( ficells[,4], "BH" ) < .1,  ]
+ficycs <- tw97$tab$descycles; ficycs[ p.adjust( ficycs[,4], "BH" ) < .1,  ]
+
+
+# other interesting tools
+others <- getSwideInferences( obj=dfs$FST.97, X=des97 )
+others$tab
+ #-- genus-wide other
+ pseudo <- dfs$FST.97[ grep( "Pseudomonas", fData(dfs$FST.97)$Genus ), ]
+ others.pseudo <-getSwideInferences( obj=pseudo, X=des97 )
+ others.pseudo$tab
+
+
+rm(dfs, pk97, pk99)
+
+```
+
+
+
+
+#PIH100
+```{r}
+
+# -- Data prep
+
+psu <-list()
+psu$fst97 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_97_SILVA132.RDS")
+pData(psu$fst97)$Sample_Def <- factor(pData(psu$fst97)$Sample_Def, levels=c("CaseControl", "Case", "LabControl"))
+des97 <- model.matrix( ~ factor(Sample_Def, levels=c("CaseControl", "Case", "LabControl")), 
+                       data = pData(psu$fst97) )
+
+# SS
+pk97 <- prokounter::getProkounterTrends( mat=exprs(psu$fst97), genus = fData(psu$fst97)$Genus, fit.proc = "ss", plt=TRUE) 
+
+#sample-wide 
+sw97 <- prokounter::getDRforSampleGroups( pkobj = pk97, des=des97, fg.inc = TRUE )
+sw97$tab
+
+#with bootstrap to randomize over spline models
+sw97.boot <- prokounter::getDRforSampleGroups.bootWholeData( esetobj = psu$fst97, des = des97, genusLabel = "Genus", ncore = 4  )
+sw97.boot$`desfactor(Sample_Def, levels = c("CaseControl", "Case", "LabControl"))Case`
+sw97.boot$`desfactor(Sample_Def, levels = c("CaseControl", "Case", "LabControl"))LabControl`
+
+# genera
+gw97 <- prokounter::getDRforGenera( pkobj = pk97, des=des97 )
+ficase97 <- gw97$tab$`desfactor(Sample_Def, levels = c("CaseControl", "Case", "LabControl"))Case`
+ficase97[ which( p.adjust( ficase97[,4], "BH" ) < .1),  ]
+pltProkounterDatForGenus(  pkobj = pk97, genusLabel = " D_5__Paenibacillus", 
+                           esetobj = psu$fst97, pdatColLabel = "Sample_Def", bplt = TRUE 
+                           )
+
+#Order-wise DR
+coll <- data.frame( "genus"=fData(psu$fst97)$Genus, "order"=fData(psu$fst97)$Order )
+cw0 <- prokounter::getDRforTaxaCollection( pkobj = pk97, des=des97, genus2collection = coll, 
+                                          depth.inc = FALSE, fg.inc = FALSE )
+cw1 <- prokounter::getDRforTaxaCollection( pkobj = pk97, des=des97, genus2collection = coll, 
+                                          depth.inc = FALSE, fg.inc = TRUE )
+fi <- which( p.adjust( cw0$tab$`desfactor(Sample_Def, levels = c("CaseControl", "Case", "LabControl"))Case`[,4], "BH" ) < .1 ); cw0$tab$`desfactor(Sample_Def, levels = c("CaseControl", "Case", "LabControl"))Case`[fi,]
+
+
+# -- lo vs ss on FST97
+op <-par(mfrow=c(1,2), pty='s')
+psupk <- prokounter::getProkounterTrends( exprs(psu$fst97), genus=as.character(fData(psu$fst97)$Genus), fit.proc = "lo", plt=TRUE )
+psupk <- prokounter::getProkounterTrends( exprs(psu$fst97), genus=as.character(fData(psu$fst97)$Genus), fit.proc = "ss", plt = TRUE )
+par(op)
+
+```
+
+
+# Uncorrelatedness plots. 
+
+```{r}
+genDRDA <- function( obj, des, genus, grpLabel="Sample_Def", cont.lab="CaseControl", case.lab="Case", fcCoefName = paste0( "des",grpLabel,case.lab ), 
+                     pk= getProkounterTrends( mat=exprs(obj), genus=genus ),
+                     gw= getDRforGenera( pkobj=pk, des=des, fg.inc=TRUE),
+                     titlestr= paste( case.lab, "vs", cont.lab ), ...  ){
+  library(prokounter)
+  
+  case.si <- which( pData(obj)[[grpLabel]] == case.lab )
+  cont.si <- which( pData(obj)[[grpLabel]] == cont.lab )
+  tau <- colSums( exprs(obj) )
+  ra.gw <- lapply( unique(genus), function(g){
+    fi <- which( genus==g )
+    go <- colSums(exprs(obj[fi,,drop=FALSE]))
+    rab <- go/tau
+    #rab[ !is.finite(rab) ] <- 0
+    c( "case"=mean(rab[case.si]), "cont"=mean(rab[cont.si]) )
+  }  )
+  names( ra.gw ) <- unique(genus)
+  
+  fcCoefName <- paste0( "des",grpLabel,case.lab )
+  indx2match <- match( rownames(gw$tab[[fcCoefName]]), names(ra.gw) )
+  da <- sapply( ra.gw[indx2match], function(x) log( x[1] ) - log( x[2] )  )
+  dr <- gw$tab[[fcCoefName]]$Estimate
+  op <- par(mfrow=c(1,2), pty='s')
+  plot( dr ~ da, ylab = "log R.FC", xlab="log RelAb.FC", ylim=c(-2, 2), 
+        main =titlestr, ...   ); abline( h=0 ); abline( v=0 )
+  fi <- which( p.adjust( gw$tab[[fcCoefName]]$Pr...z.., "BH" ) < .1 )
+  points( dr[fi] ~ da[fi], col ='red', pch=19  ); 
+  par(op)
+  list( "gw"=gw, 
+        "da"=da,
+        "dr"=dr,
+        "fi"=fi
+        )
+}
+
+#PIH100 
+pdf( file="./results/images/uncorr_prokounter_pih100.pdf", useDingbats = FALSE )
+psu.fst97 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_97_SILVA132.RDS")
+pData(psu.fst97)$Sample_Def <- factor(pData(psu.fst97)$Sample_Def, levels=c("CaseControl","Case", "LabControl")   )
+des <- model.matrix( ~Sample_Def, data=pData(psu.fst97))
+pk <- prokounter::getProkounterTrends(exprs(psu.fst97), 
+                                        genus=as.character(fData(psu.fst97)$Genus), 
+                                        fit.proc = "ss" )
+psugw <- prokounter::getDRforGenera( pkobj = pk, des = des )
+psures <- genDRDA( obj=psu.fst97, 
+         des= des, gw=psugw, 
+         genus=as.character(fData(psu.fst97)$Genus),
+         grpLabel = "Sample_Def", 
+         cont.lab="CaseControl", 
+         case.lab="Case", 
+         fcCoefName = paste0( "des", "Sample_Def", "Case" ),
+         titlestr = "Case vs. Control")
+dev.off()
+psures$da[psures$fi]
+psures$dr[psures$fi]
+
+
+rm(psu.fst97, pk)
+
+# -- Wastewater
+load( file="./data/wastewater/wastewater.rdata" ) #loads wastewaterMRobj
+ww <- convertMRtoES(wastewaterMRobj)
+stfs <-  c("1_Influent", "Effluent", "Before_UV", "After_UV", "Pond",  "Inlet_pumphouse"  )
+si <- which( pData( ww )$Sample_Type %in% stfs )
+so <- ww[,si]
+pData(so)$Sample_Type <- factor( as.character(pData(so)$Sample_Type), levels=stfs )
+wwpk <- prokounter::getProkounterTrends(exprs(so), genus=as.character(fData(so)$genus), fit.proc = "ss", plt=TRUE )
+des <- model.matrix( ~Sample_Type, data=pData(so) )
+
+#genus specific , effluent 
+wwsw<- getDRforSampleGroups( pkobj=wwpk, des=des, fg.inc = TRUE)
+wwgw<- getDRforGenera( pkobj=wwpk, des=des)
+
+pdf( file="./results/images/uncorr_prokounter_wastewater_effvsInfl.pdf", useDingbats = FALSE )
+wwres <- genDRDA( obj=so, gw = wwgw, 
+         des= model.matrix( ~Sample_Type, data=pData(so)), 
+         genus=as.character(fData(so)$genus),
+         grpLabel = "Sample_Type", 
+         case.lab="Effluent", 
+         cont.lab="1_Influent", 
+         fcCoefName = paste0( "des", "Sample_Type", "Effluent" ),
+         titlestr = "Effluent vs. Influent")
+dev.off()
+with(wwres, cbind( da[fi], dr[fi] ) )
+
+#inlet to pumphouse vs influent
+pdf( file="./results/images/uncorr_prokounter_wastewater_InletPumpHouseVsInfl.pdf", useDingbats = FALSE )
+wwres2 <- genDRDA( obj=so, gw = wwgw, 
+         des= model.matrix( ~Sample_Type, data=pData(so)), 
+         genus=as.character(fData(so)$genus),
+         grpLabel = "Sample_Type", 
+         case.lab="Inlet_pumphouse", 
+         cont.lab="1_Influent", 
+         titlestr = "Inlet to pumphouse vs. Influent")
+dev.off()
+with(wwres2, cbind( da[fi], dr[fi] ) )
+rm(wwpk, ww)
+
+# -- TIME SERIES
+alm.AF <- readRDS( file="./data/alm.AF.RDS" )
+des <- model.matrix( ~group , data=pData(alm.AF) )
+
+# here group 1 is pre-infection, group 2 infection, and group 3 post-infection. 
+#group <= 150 days #pre-infection, defined according to the original paper
+#(group >=151) & (group <=159) #infection
+#(group > 159)#post-infection
+
+almpk <- prokounter::getProkounterTrends( exprs( alm.AF ), genus=as.character(fData(alm.AF)$taxonomy6), fit.proc="ss", plt=TRUE )
+
+# -- genera specific
+alm.gw1 <- prokounter::getDRforGenera( almpk, des = des ); 
+
+pdf( file="./results/images/uncorr_prokounter_timeseries_InfVsPreInf.pdf", useDingbats = FALSE )
+almres1 <- genDRDA( obj=alm.AF, gw = alm.gw1, 
+         des= model.matrix( ~group, data=pData(alm.AF)), 
+         genus=as.character(fData(alm.AF)$taxonomy6),
+         grpLabel = "group", 
+         case.lab="2", 
+         cont.lab="1", 
+         titlestr = "Infection vs. Pre-Infection")
+dev.off()
+
+pdf( file="./results/images/uncorr_prokounter_timeseries_PostVsPreInf.pdf", useDingbats = FALSE )
+almres2 <- genDRDA( obj=alm.AF, gw = alm.gw1, 
+         des= model.matrix( ~group, data=pData(alm.AF)), 
+         genus=as.character(fData(alm.AF)$taxonomy6),
+         grpLabel = "group", 
+         case.lab="3", 
+         cont.lab="1", 
+         titlestr = "Post- vs. Pre-Infection")
+dev.off()
+```
+
+
+
+# Asymptotic estimators tracking
+Look at Paper_AsymptoticAndObservedRichnessTracking.Rmd
+
+# Trends
+Look at Paper_SSandLoessTrends.Rmd
+
+# Skewed relative abundance fold changes leading to technical artifacts. 
+Look at Paper_FoldChangeDistributionTechPredictors.Rmd
+

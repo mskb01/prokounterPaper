@@ -1,0 +1,1754 @@
+---
+title: "wgtac"
+author: "M. Senthil Kumar"
+date: "4/19/2021"
+output: html_document
+---
+
+Load
+```{r}
+require(metagenomeSeq)
+require(matrixStats)
+require(MASS)
+require(prokounter)
+require(breakaway)
+require(ggplot2)
+source('~/Documents/research/StatisticalAnalysisProjects/NSPSU/utils_prokounter.R')
+```
+
+
+code
+```{r}
+
+getst <- function(nbfit){
+  pr2 <- 1-(nbfit$deviance/nbfit$null.deviance) #mcfadden's
+  c( "pr2"=pr2, "theta"=nbfit$theta, "bar"=1.96*nbfit$SE.theta ) 
+}
+
+genFigwgtac <- function( mat, genus, grp, des, plt.ss=FALSE, depth.inc=FALSE, depth.only=FALSE, quad.depth=FALSE, get.lo=FALSE, get.ss=TRUE, toig=c("g__", "unknown", "NA", "", "undef"), mod="NB" ){
+  library(prokounter)
+  cc <- getColsForFactors( grp, set="Paired"  )
+  genus <- as.character(genus)
+  ug <- unique(genus)
+  gi <- which( ug %in% toig )
+  if(length(gi)>0){
+    ug <- ug[ -gi ]   
+  }
+  
+  gcnts <- sapply( ug, function(g){
+    sum( colSums( mat[which(genus ==g),,drop=FALSE] )    )
+  } )
+  g2ft <- ug[order( gcnts,decreasing=TRUE)[1:5]]
+  
+  df <- do.call( rbind, lapply( g2ft, function(g) prokounter:::.getRecovAbPat( mat, genus, g  ) ) )
+  
+ 
+  op <- par(mfrow=c(2,3), pty='s')
+  plot( log2(colSums( mat>0 )) ~ log2( colSums( mat  ) ), xlab = "Log2 Sample Depth", ylab = "Log2 Taxa Count", col = cc$cols );   legend( "topleft", cc$map[,2], fill = cc$map[,1], bty="n" )
+  for( i in g2ft ){
+    dfs <- subset( df, g==i )
+    plot( lm ~ lr,  data = dfs, xlab = "Log2 Recovered Abundance", ylab = "Log2 Feature Count", col = cc$cols )  
+  }
+  #par(op)
+  
+  #plot.new()
+  #op <- par(mfrow=c(1,2), pty='s')
+  if(get.lo){
+    pkmsd.lo <- prokounter::getProkounterTrends( mat, genus = genus, plt = TRUE, fit.proc = "lo" )
+  }
+  if( get.ss ){
+    pkmsd.ss <- prokounter::getProkounterTrends( mat, genus = genus, plt = TRUE, fit.proc="ss" )    
+  }
+  if(plt.ss){
+    for( i in seq(4) ){
+      pkmsd.ss <- prokounter::getProkounterTrends( mat, genus = genus, plt = TRUE, fit.proc="ss" )    
+    }  
+  }
+  
+  par(op)
+  
+  #rownames(des) <- colnames(mat)
+  if(get.lo){
+    pk97df <- pkmsd.lo$df  
+  } else {
+    pk97df <- pkmsd.ss$df  
+  } 
+  
+  netlr <- aggregate( pk97df$lr, by=list(pk97df$samples), prokounter:::.lsume)
+  netlm <- aggregate( pk97df$lm, by=list(pk97df$samples), prokounter:::.lsume)
+  netltv <- aggregate( pk97df$ltv, by=list(pk97df$samples), prokounter:::.lsume)
+  netdf <- merge( merge( netlr, netlm, by="Group.1" ), netltv, by="Group.1" )
+  colnames( netdf ) <- c( "sample", "netlr", "netlm", "netltv"  )
+  rownames( netdf ) <- netdf$sample
+  netdf <- netdf[ rownames(des), ,drop=FALSE ]
+  #des <- des[ rownames(netdf), ,drop=FALSE]
+  
+  des <- des[ match( rownames(netdf), rownames(des) ) , ]
+  
+  if(depth.inc | depth.only){
+    des <- cbind( des, netlr=netdf$netlr )
+  } 
+  if( depth.only & quad.depth )
+    des <- cbind(  des, netlrSq= netdf$netlr^2)
+  
+  if(!depth.only){ #i.e, check with ltv. depth.only = T when no ltv is incorporated in the "just" model. 
+    des <- cbind( des, "netltv"=netdf$netltv )  
+  }
+  
+  
+  
+  if( mod =="NB"){
+    full <- glm.nb( exp(netlm) ~ -1+des, data = netdf)
+    just <- glm.nb( exp(netlm) ~ -1+des[,ncol(des),drop=FALSE], data = netdf)  
+  } else {
+    full <- glm( exp(netlm) ~ -1+des, data = netdf,family="poisson")
+    just <- glm( exp(netlm) ~ -1+des[,ncol(des),drop=FALSE], data = netdf, family="poisson")  
+  }
+  
+  full.pr2 <- 1-(full$deviance/full$null.deviance) #mcfadden's
+  just.pr2 <- 1-(just$deviance/just$null.deviance)
+  full.theta <- full$theta
+  full.bar <- 1.96*full$SE.theta
+  just.theta <- just$theta
+  just.bar <- 1.96*just$SE.theta
+  
+  #pr2 <- 1-(nbfit$deviance/nbfit$null.deviance) #mcfadden's
+  #c( "pr2"=pr2, "theta"=nbfit$theta, "bar"=1.96*nbfit$SE.theta ) 
+  
+  models <- list( "full"=full, "just"=just)
+  tab   <-  c( "just.pr2"=just.pr2, "full.pr2"=full.pr2, 
+               "just.theta"=just.theta, "just.bar"=just.bar,
+               "full.theta"=full.theta, "full.bar"=full.bar,
+               "just.resid.dev"=just$deviance, "just.null.dev"=just$null.deviance,
+               "full.resid.dev"=full$deviance, "full.null.dev"=full$null.deviance,
+               "just.resid.dof"=just$df.resid,"just.null.dof"=just$df.null,
+               "full.resid.dof"=full$df.resid,"full.null.dof"=full$df.null,
+               "just.aic"=AIC(just), "full.aic"=AIC(full)
+               )
+  
+  list( "models"=models,
+        "tab"=as.table( tab ), 
+        "df"=pk97df
+        )
+  
+}
+
+
+genFigwtac.genuswise <- function( mat, genus, grp, des, plt.ss=FALSE, get.lo=FALSE, get.ss=TRUE, depth.inc=FALSE,quad.depth=FALSE, depth.only=FALSE, toig=c("g__", "unknown", "NA", "", "undef"), mod="NB" ){
+  
+  library(prokounter)
+  cc <- getColsForFactors( grp, set="Paired"  )
+  genus <- as.character(genus)
+  ug <- unique(genus)
+  gi <- which( ug %in% toig )
+  if(length(gi)>0){
+    ug <- ug[ -gi ]   
+  }
+  
+  gcnts <- sapply( ug, function(g){
+    sum( colSums( mat[which(genus ==g),,drop=FALSE] )    )
+  } )
+  g2ft <- ug[order( gcnts,decreasing=TRUE)[1:5]]
+  
+  df <- do.call( rbind, lapply( g2ft, function(g) prokounter:::.getRecovAbPat( mat, genus, g  ) ) )
+  
+  #print(ug)
+  #print(df)
+  
+  
+  op <- par(mfrow=c(2,3), pty='s')
+  plot( log2(colSums( mat>0 )) ~ log2( colSums( mat  ) ), xlab = "Log2 Sample Depth", ylab = "Log2 Taxa Count", col = cc$cols );   legend( "topleft", cc$map[,2], fill = cc$map[,1], bty="n" )
+  for( i in g2ft ){
+    dfs <- subset( df, g==i )
+    plot( lm ~ lr,  data = dfs, xlab = "Log2 Recovered Abundance", ylab = "Log2 Feature Count", col = cc$cols )  
+  }
+  #par(op)
+  
+  #plot.new()
+  #op <- par(mfrow=c(1,2), pty='s')
+  if(get.lo){
+    pkmsd.lo <- prokounter:::getProkounterTrends( mat, genus = genus, plt = TRUE, fit.proc = "lo" )
+  }
+  if( get.ss ){
+    pkmsd.ss <- prokounter:::getProkounterTrends( mat, genus = genus, plt = TRUE, fit.proc="ss" )    
+  }
+  if(plt.ss){
+    for( i in seq(4) ){
+      pkmsd.ss <- prokounter:::getProkounterTrends( mat, genus = genus, plt = TRUE, fit.proc="ss" )    
+    }  
+  }
+  
+  par(op)
+  
+  #rownames(des) <- colnames(mat)
+  if(get.lo){
+    pk97df <- pkmsd.lo$df  
+  } else {
+    pk97df <- pkmsd.ss$df  
+  } 
+  
+  netlr <- aggregate( pk97df$lr, by=list(pk97df$samples), prokounter:::.lsume)
+  
+  
+  
+  tauvec <- netlr$x[match( pk97df$samples, netlr$Group.1 )]
+  netdf <- data.frame( pk97df, tauvec )
+  des <- des[ match( pk97df$samples, rownames(des) ) , ]
+  
+  
+  if( mod =="NB"){
+    if(depth.only){#no ltv, only sampling effort
+      if( quad.depth ){
+        full <- glm.nb( exp(lm) ~ -1+ g + tauvec + I(tauvec^2) + des, data = netdf)
+        just <- glm.nb( exp(lm) ~ -1+ tauvec + I(tauvec^2), data = netdf)    
+      } else {
+        full <- glm.nb( exp(lm) ~ -1+ g + tauvec + des, data = netdf)
+        just <- glm.nb( exp(lm) ~ -1+ tauvec, data = netdf)    
+      }
+    } else {
+      full <- glm.nb( exp(lm) ~ -1+ g + tauvec + ltv + des, data = netdf)
+      just <- glm.nb( exp(lm) ~ -1+ ltv, data = netdf)    
+    }
+  } else {
+    if(depth.only){#no ltv, only sampling effort
+      if(quad.depth){
+        full <- glm( exp(lm) ~ -1+ g + tauvec + I(tauvec^2) + des, data = netdf,family="poisson")
+        just <- glm( exp(lm) ~ -1+ tauvec + I(tauvec^2), data = netdf, family="poisson")   
+      } else {
+        full <- glm( exp(lm) ~ -1+ g + tauvec + des, data = netdf,family="poisson")
+        just <- glm( exp(lm) ~ -1+ tauvec, data = netdf, family="poisson")    
+      }
+    } else {
+      full <- glm( exp(lm) ~ -1+ g + tauvec + ltv + des, data = netdf,family="poisson")
+      just <- glm( exp(lm) ~ -1+ ltv, data = netdf, family="poisson")    
+    }
+  }
+  
+  full.pr2 <- 1-(full$deviance/full$null.deviance) #mcfadden's
+  just.pr2 <- 1-(just$deviance/just$null.deviance)
+  full.theta <- full$theta
+  full.bar <- 1.96*full$SE.theta
+  just.theta <- just$theta
+  just.bar <- 1.96*just$SE.theta
+  
+  models <- list( "full"=full, "just"=just)
+  tab   <-  c( "just.pr2"=just.pr2, "full.pr2"=full.pr2, 
+               "just.theta"=just.theta, "just.bar"=just.bar,
+               "full.theta"=full.theta, "full.bar"=full.bar,
+               "just.resid.dev"=just$deviance, "just.null.dev"=just$null.deviance,
+               "full.resid.dev"=full$deviance, "full.null.dev"=full$null.deviance,
+               "just.resid.dof"=just$df.resid,"just.null.dof"=just$df.null,
+               "full.resid.dof"=full$df.resid,"full.null.dof"=full$df.null,
+               "just.aic"=AIC(just), "full.aic"=AIC(full)
+               )
+  
+  list( "models"=models,
+        "tab"=as.table( tab ), 
+        "df"=df
+        )
+  
+}
+
+
+pltQGWise <- function(obj, genusLab="Genus", dsname="data") {
+  
+  obj <- obj[ which( rowSums(exprs(obj))>0 ),  ]
+  genus <- as.character(fData(obj)[[genusLab]])
+  
+  ug <-unique( genus )
+  prs <- c(.1, .25,.5, .75)  
+  df <- do.call(rbind, lapply( ug, function(g){
+    fi <- which( genus == g )
+    somat <- exprs( obj[fi,,drop=FALSE] )
+    ygplus <- sum(colSums( somat  ))
+    inc <- rowSums( somat>0 )/ncol(obj)
+    
+    quantIncidences <- c(quantile( inc, na.rm=TRUE,
+                                  probs=prs
+                                  ) )
+    
+                                   
+    dft <- data.frame( "genus"=g , 
+                       "ygplus"=ygplus,
+                       t(quantIncidences)
+                       )
+    dft
+  } ) )
+  
+  
+  ord <- order( df$ygplus )
+  df <- df[ord,]
+  
+  #op <- par(mfrow=c(1,2), pty='s')
+  df.colIndx <- 3:6
+  pr.indx <- 1:4
+  cc <- getColsForFactors( factor(prs[pr.indx]), set="Accent" , m=10)
+  matplot( log( df$ygplus ), df[,df.colIndx], type='l', 
+           ylab = "Within-genus taxa incidence quantiles\n (fraction samples occurring)", 
+           xlab = "Log Total dataset-wide genera abundance", col = cc$map[,1], 
+           main = paste(dsname, "Number of samples: ",ncol(obj)), cex.main = .75
+           )
+  legend( "topright", legend=as.numeric(cc$map[,2]), fill=cc$map[,1], title="Probability", bty="n" )
+  
+  med.fn <-matrixStats::colMedians(as.matrix(df[3:6]), na.rm=TRUE)
+  names( med.fn ) <- prs
+  barplot( med.fn , xlab = "Probability", ylab = "Median within-genus incidence quantile", col = cc$map[,1]   )
+  #par(op)
+  
+  df
+}
+
+
+
+```
+
+# Incidence with datasets
+
+Mock only
+```{r}
+
+dfs <- list()
+dfs2 <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+dfs$Pseudomonas.FST99 <- dfs2$FST.99[grep( "Pseudomonas", fData(dfs2$FST.99)$Genus ),]
+dfs$Pseudomonas.FST97 <- dfs2$FST.97[grep( "Pseudomonas", fData(dfs2$FST.97)$Genus ),]
+dfs$Pseudomonas.Dada2 <- dfs2$Dada2[grep( "Pseudomonas", fData(dfs2$Dada2)$Genus ),]
+rm(dfs2)
+
+
+mock.gut.genera <- c("Coprobacillus", "Bifidobacterium", "Collinsella", "Bilophila", "Escherichia", "Fusobacterium", "Anaerostipes","Clostridium", "Lactobacillus", "Pediococcus", "Ralstonia","Paenibacillus","Parabacteroides","Bacteroides","Propionibacterium","Alistipes","Subdoligranulum","Enterococcus","Synergistes")
+
+mock.oral.genera <- c("Bacillus","Bifidobacterium","Rothia","Parvimonas","Mogibacterium","Campylobacter","Eggerthella","Slackia","Klebsiella","Fusobacterium","Leptotrichia","Weissella","Eikenella","Neisseria","Tannerella","Prevotella","Capnocytophaga","Granulicatella","Streptococcus","Gemella","Dialister","Veillonella")
+  
+getGutFtrs <- function( obj ){
+  unique(unlist(lapply(mock.gut.genera, function(g) grep( g, fData(obj)$Genus )) ))
+}
+getOralFtrs <- function( obj ){
+  unique(unlist(lapply(mock.oral.genera, function(g) grep( g, fData(obj)$Genus )) ))
+}
+
+hlbfst99 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb99.RDS" )
+gut <- grep( "Artificial Gut" , pData(hlbfst99)$V27 )
+oral <- grep( "Artificial Oral" , pData(hlbfst99)$V27 )
+dfs$MBQCHLB.Gut.FST99 <- hlbfst99[  getGutFtrs(hlbfst99) ,gut]
+dfs$MBQCHLB.Oral.FST99 <- hlbfst99[ getOralFtrs(hlbfst99),oral]
+
+hlbfst97 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb97.RDS" )
+gut <- grep( "Artificial Gut" , pData(hlbfst97)$V27 )
+oral <- grep( "Artificial Oral" , pData(hlbfst97)$V27 )
+dfs$MBQCHLB.Gut.FST97 <- hlbfst97[  getGutFtrs(hlbfst97) ,gut]
+dfs$MBQCHLB.Oral.FST97 <- hlbfst97[ getOralFtrs(hlbfst97),oral]
+
+hlbdada <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/dada.RDS" )
+gut <- grep( "Artificial Gut" , pData(hlbdada)$V27 )
+oral <- grep( "Artificial Oral" , pData(hlbdada)$V27 )
+dfs$MBQCHLB.Gut.Dada2 <- hlbdada[  getGutFtrs(hlbdada) ,gut]
+dfs$MBQCHLB.Oral.Dada2 <- hlbdada[ getOralFtrs(hlbdada),oral]
+
+#boxplot( sapply( dfs, function(x) colSums(  exprs(x) ) ) )
+
+# 
+
+gls <- rep("Genus", length(dfs)) 
+indx <- seq(length(dfs)); names(indx) <- names( dfs )
+res <- lapply( indx, function(i){
+  obj <- dfs[[i]]
+  gl <- gls[i]
+  print(gl)
+  z <- pltQGWise( obj, genusLab=gl, dsname = "glMouse, " )
+  z
+}  )
+
+
+op <- par(mfrow=c(1,2), mar=c(10,4,2,1))
+
+ps <- seq( 0, .5, by=.001  )
+ecdfs <- do.call( rbind, lapply( names(res), function(nme){
+  x <- res[[nme]]
+  fn <- ecdf( x$X50. )
+  data.frame( p=ps,  "Fn"= fn(ps), "survey"=nme )
+} ) )
+library(ggplot2)
+
+ecdfs$survey <- factor( ecdfs$survey, levels=c( "Pseudomonas.FST99", "Pseudomonas.FST97", "Pseudomonas.Dada2", "MBQCHLB.Gut.FST99", "MBQCHLB.Gut.FST97", "MBQCHLB.Gut.Dada2", "MBQCHLB.Oral.FST99","MBQCHLB.Oral.FST97",  "MBQCHLB.Oral.Dada2" ) )
+mycols <- colorRampPalette(brewer.pal(name="RdBu", n = 10))(length(levels(ecdfs$survey)))
+ggplot( data=ecdfs, 
+        aes( x=p, y=Fn, colour=survey, linetype=survey) 
+        ) + geom_line(size=1) + xlab( "Median sub-genus taxa incidence (fraction samples occurring)" ) + ylab( "Fraction mock genera" ) #+ scale_color_manual( values = mycols)
+
+ggsave( file="./results/images/TaxaIncidence_MOCK.pdf", 
+        useDingbats = FALSE, width = round(6/.72, 2), height=6 ) 
+
+
+
+```
+
+All
+```{r}
+data(mouseData)
+mouse <- convertMRtoES( mouseData )
+library(msd16s)
+dfs <- list()
+dfs$Mouse <- mouse
+dfs$Diarrhea <- convertMRtoES(msd16s)
+dfs$TS <-readRDS( file="./data/alm.AF.RDS" )
+load( file="./data/wastewater/wastewater.rdata" ) #loads wastewaterMRobj
+dfs$WW <- convertMRtoES(wastewaterMRobj)
+dfs$PIH100.FST99 <-  readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_99_SILVA132.RDS")
+dfs$PIH100.FST97 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_97_SILVA132.RDS")
+dfs$PIH100.Dada2 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime2_Jan2021/PIH_CSF_First100_Dada2_SILVA132.RDS")
+dfs2 <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+dfs$Pseudomonas.FST99 <- dfs2$FST.99
+dfs$Pseudomonas.FST97 <- dfs2$FST.97
+dfs$Pseudomonas.Dada2 <- dfs2$Dada2
+
+dfs$MBQCHLB.FST99 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb99.RDS" )
+dfs$MBQCHLB.FST97 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb97.RDS" )
+dfs$MBQCHLB.Dada2 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/dada.RDS" )
+
+
+rm(dfs2)
+
+gls <- c( "genus", "genus", "taxonomy6", "genus", rep("Genus", 9) )
+indx <- seq(length(dfs)); names(indx) <- names( dfs )
+res <- lapply( indx, function(i){
+  obj <- dfs[[i]]
+  gl <- gls[i]
+  print(gl)
+  z <- pltQGWise( obj, genusLab=gl, dsname = "glMouse, " )
+  z
+}  )
+
+op <- par(mfrow=c(1,2), mar=c(10,4,2,1))
+
+ps <- seq( 0, .25, by=.01  )
+ecdfs <- do.call( rbind, lapply( names(res), function(nme){
+  x <- res[[nme]]
+  fn <- ecdf( x$X50. )
+  data.frame( p=ps,  "Fn"= fn(ps), "survey"=nme )
+} ) )
+library(ggplot2)
+
+ecdfs$survey <- factor( ecdfs$survey, levels=c( "Pseudomonas.FST99", "Pseudomonas.FST97", "Pseudomonas.Dada2", "MBQCHLB.FST99", "MBQCHLB.FST97", "MBQCHLB.Dada2", "PIH100.FST99", "PIH100.FST97", "PIH100.Dada2", "Mouse", "Diarrhea", "TS", "WW"  ) )
+mycols <- colorRampPalette(brewer.pal(name="RdBu", n = 10))(length(levels(ecdfs$survey)))
+ggplot( data=ecdfs, 
+        aes( x=p, y=Fn, colour=survey) 
+        ) + geom_line(size=1) + xlab( "Median sub-genus taxon incidence (fraction samples occurring)" ) + ylab( "Fraction genera" ) #+ scale_color_manual( values = mycols)
+#ggsave( file="./results/images/TaxaIncidenceAll.pdf", 
+#        useDingbats = FALSE, width = round(6/.72, 2), height=6 ) 
+
+
+
+barplot( sapply( res, function(x){
+  fn <-ecdf(x$X50.)
+  fn(.05)
+} ),las=2 )
+
+barplot( sapply( res, function(x){
+  fn <-ecdf(x$X75.)
+  fn(.05)
+} ),las=2 )
+
+#it appears the waste water has been filtered for at least a total count of 5, with occurrence at least in 5 samples.
+min( rowSums( exprs(dfs$WW)>0 ) )
+min( rowSums( exprs(dfs$WW) ) )
+
+min( rowSums( exprs(dfs$diarrhea)) )
+min( rowSums( exprs(dfs$diarrhea)>0) )
+
+```
+
+Mouse data 
+--
+Trend: 99% pseudo R^2 on its own. 
+SD only (kd, and gwd variables below) : 84%. 
+Better AIC with the trend model - we must acknowledge that we did select it first though. 
+```{r}
+data(mouseData)
+mouse <- convertMRtoES( mouseData )
+grp <- factor(pData(mouse)$diet, levels=c("BK","Western"))
+des <- model.matrix( ~diet, data=pData(mouse) )
+
+# sample-wise
+kd <- genFigwgtac(mat=exprs(mouse), genus = fData(mouse)$genus, grp = grp, des=des, depth.only = TRUE )
+kd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.990390e-01   9.991355e-01   2.945207e+01   8.026973e+00   4.919933e+01   1.471944e+01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.395257e+02   1.451898e+05   1.387276e+02   1.604701e+05   1.380000e+02   1.390000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  1.360000e+02   1.390000e+02   1.385356e+03   1.329964e+03 
+
+# > #
+k <- genFigwgtac(mat=exprs(mouse), genus = fData(mouse)$genus, grp = grp, des=des, plt.ss = FALSE, depth.only = FALSE)
+k$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.991681e-01   9.991921e-01   6.544187e+01   2.114652e+01   7.585708e+01   2.541917e+01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.397244e+02   1.679573e+05   1.385835e+02   1.715251e+05   1.380000e+02   1.390000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  1.360000e+02   1.390000e+02   1.297051e+03   1.285300e+03 
+
+
+#genus-wise
+gwd <- genFigwtac.genuswise(mat=exprs(mouse), genus = fData(mouse)$genus, grp = grp, des=des, depth.only = TRUE)
+gwd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  8.362092e-01   9.668883e-01   6.668318e-01   3.356362e-02   6.623378e+00   6.877820e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.994221e+03   1.828076e+04   2.113823e+03   6.383916e+04   2.722000e+03   2.723000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.661000e+03   2.723000e+03   1.744305e+04   1.257631e+04
+
+gwd.quad <- genFigwtac.genuswise(mat=exprs(mouse), genus = fData(mouse)$genus, grp = grp, des=des, depth.only = TRUE, quad.depth = TRUE)
+gwd.quad$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  8.362200e-01   9.669618e-01   6.668789e-01   3.356657e-02   6.625426e+00   6.868691e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.994184e+03   1.828174e+04   2.109352e+03   6.384580e+04   2.721000e+03   2.723000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.660000e+03   2.723000e+03   1.744483e+04   1.257352e+04 
+
+# > #
+gw <- genFigwtac.genuswise(mat=exprs(mouse), genus = fData(mouse)$genus, grp = grp, des=des, depth.only = FALSE)
+gw$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.682008e-01   9.868177e-01   4.900782e+00   4.020411e-01   5.424951e+02   9.127291e+02 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.820913e+03   5.726277e+04   1.426176e+03   1.081889e+05   2.722000e+03   2.723000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.660000e+03   2.723000e+03   1.250112e+04   1.027286e+04 
+
+
+op <- par(mfrow=c(1,2), pty='s')
+pkmouse.ss <- prokounter::getProkounterTrends( exprs(mouse), 
+                          genus = as.character(fData(mouse)$genus), 
+                          plt = TRUE, 
+                          fit.proc="ss" )
+pkmouse.lo <- prokounter::getProkounterTrends::getProkounterTrends( exprs(mouse), 
+                          genus = as.character(fData(mouse)$genus), 
+                          plt = TRUE, 
+                          fit.proc="lo" )
+par(op)
+
+rm(mouse, mouseData, gw, k)
+```
+
+MSD
+```{r}
+library(msd16s)
+msd <- convertMRtoES(msd16s)
+grp <- factor(pData(msd)$Type, levels=c("Control","Case"))
+des <- model.matrix( ~grp )
+rownames(des) <- colnames(msd)
+
+# sample-wise
+kd <- genFigwgtac(mat=exprs(msd), genus = fData(msd)$genus, grp = grp, des=des, depth.only = TRUE )
+kd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.992980e-01   9.993422e-01   6.112959e+00   5.338082e-01   7.105164e+00   6.249044e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.019334e+03   1.451980e+06   1.016122e+03   1.544739e+06   9.910000e+02   9.920000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  9.890000e+02   9.920000e+02   1.272675e+04   1.257763e+04 
+
+# > #
+k <- genFigwgtac(mat=exprs(msd), genus = fData(msd)$genus, grp = grp, des=des, depth.only = FALSE )
+k$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.993597e-01   9.993863e-01   7.581977e+00   6.689191e-01   8.425903e+00   7.471695e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.014918e+03   1.585105e+06   1.013172e+03   1.651006e+06   9.910000e+02   9.920000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  9.890000e+02   9.920000e+02   1.250801e+04   1.240598e+04 
+
+#geus-wise
+kdgw <- genFigwtac.genuswise(mat=exprs(msd), genus = fData(msd)$genus, grp = grp, des=des, depth.only=TRUE )
+kdgw$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  8.745057e-01   9.466122e-01   4.785147e-01   7.131648e-03   1.159557e+00   2.091020e-02 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  3.118527e+04   2.484995e+05   2.570120e+04   4.814061e+05   2.669100e+04   2.669200e+04 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.652700e+04   2.669200e+04   1.864792e+05   1.588444e+05
+
+# > #
+kgw <- genFigwtac.genuswise(mat=exprs(msd), genus = fData(msd)$genus, grp = grp, des=des, depth.only=FALSE )
+kgw$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.851837e-01   9.896045e-01   6.172201e+00   1.708390e-01   1.449463e+01   5.424948e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.707068e+04   1.152159e+06   1.573204e+04   1.513345e+06   2.669100e+04   2.669200e+04 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.652600e+04   2.669200e+04   1.232339e+05   1.145481e+05
+
+#incidence  
+pdf( file="./results/images/incidence_msd.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(1,2), mar=c(4, 6,2,1), pty='s')
+pltQGWise( msd, genusLab="genus", dsname = "Diarrhea, " )
+dev.off()
+median( z$X50.[ z$ygplus>quantile( z$ygplus, .75 ) ] ) #.03448
+
+rm(msd, kd, k, kdgw, kgw, k )
+```
+
+
+MBQC HL-B
+```{r}
+dfs <- list()
+dfs$MBQCHLB.FST99 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb99.RDS" )
+dfs$MBQCHLB.FST97 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb97.RDS" )
+dfs$MBQCHLB.Dada2 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/dada.RDS" )
+
+# -------------- FST99 ----------
+obj <- dfs$MBQCHLB.FST99
+gut.si<- grep( "Artificial Gut", pData(obj)$V27  )
+oral.si <- grep( "Artificial Oral", pData(obj)$V27  )
+grp <- rep( "other", ncol( obj ) )
+grp[ oral.si ] <- "Oral"
+grp[ gut.si ] <- "Gut"
+pData(obj)$group <- factor(grp)
+
+des <- model.matrix( ~group , data=pData(obj) )
+
+#sample-wide
+kd <- genFigwgtac(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = TRUE
+                  )
+kd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  9.998981e-01   9.999052e-01   8.878474e+00   1.786107e+00   1.060605e+01   2.139885e+00   1.895693e+02
+#just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof 
+# 1.859447e+06   1.885548e+02   1.988376e+06   1.850000e+02   1.860000e+02   1.820000e+02   1.860000e+02 
+#     just.aic       full.aic 
+#  2.924955e+03   2.896610e+03
+
+
+#no depth only
+k <- genFigwgtac(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = FALSE
+                  )
+k$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  9.999272e-01   9.999331e-01   2.292281e+01   4.696029e+00   3.119331e+01   6.462694e+00   1.863674e+02
+#just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof 
+#  2.560455e+06   1.866318e+02   2.791158e+06   1.850000e+02   1.860000e+02   1.820000e+02   1.860000e+02
+    #just.aic       full.aic 
+  #2.745559e+03   2.695456e+03 
+
+
+#genus-specific
+kgwd <- genFigwtac.genuswise(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = TRUE
+                  )
+kgwd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  8.915494e-01   9.432531e-01   4.265152e-01   6.733442e-03   8.060186e-01   1.437285e-02   2.720106e+04
+#just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof 
+# 2.508153e+05   2.350284e+04   4.141699e+05   2.283900e+04   2.284000e+04   2.246500e+04   2.284000e+04 
+#     just.aic       full.aic 
+# 1.630800e+05   1.452817e+05 
+
+
+# > #
+kgw <- genFigwtac.genuswise(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = FALSE
+                  )
+kgw$tab
+#     just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  9.867192e-01   9.929852e-01   5.610472e+00   1.759731e-01   2.271355e+01   1.084482e+00   1.661746e+04
+#just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof 
+#  1.251241e+06   1.353762e+04   1.929867e+06   2.283900e+04   2.284000e+04   2.246400e+04   2.284000e+04
+#    just.aic       full.aic 
+#  1.089190e+05   9.667406e+04 
+
+# ------------------------------ FST97 --------------------------------------------
+obj <- dfs$MBQCHLB.FST97
+gut.si<- grep( "Artificial Gut", pData(obj)$V27  )
+oral.si <- grep( "Artificial Oral", pData(obj)$V27  )
+grp <- rep( "other", ncol( obj ) )
+grp[ oral.si ] <- "Oral"
+grp[ gut.si ] <- "Gut"
+pData(obj)$group <- factor(grp)
+
+des <- model.matrix( ~group , data=pData(obj) )
+
+#sample-wide
+kd <- genFigwgtac(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = TRUE
+                  )
+kd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  9.998340e-01   9.998525e-01   9.237221e+00   1.871446e+00   1.243188e+01   2.527832e+00   1.901722e+02
+#just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof 
+#  1.145432e+06   1.881754e+02   1.275915e+06   1.850000e+02   1.860000e+02   1.820000e+02   1.860000e+02
+      #just.aic       full.aic 
+  #2.751203e+03   2.699844e+03 
+
+
+#no depth only
+k <- genFigwgtac(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = FALSE
+                  )
+k$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  9.998925e-01   9.999001e-01   3.443318e+01   7.197474e+00   4.610772e+01   9.773702e+00   1.858373e+02
+#just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof
+#1.729354e+06   1.855864e+02   1.857210e+06   1.850000e+02   1.860000e+02   1.820000e+02   1.860000e+02 
+#      just.aic       full.aic 
+#  2.505170e+03   2.458727e+03 
+
+#genus-specific
+kgwd <- genFigwtac.genuswise(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = TRUE
+                  )
+kgwd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  8.427626e-01   9.265446e-01   5.300059e-01   8.708856e-03   1.166848e+00   2.299055e-02   2.625865e+04
+ #just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof
+  #1.670001e+05   2.191830e+04   2.983890e+05   2.317600e+04   2.317700e+04   2.280500e+04   2.317700e+04
+      #just.aic       full.aic 
+  #1.507798e+05   1.305051e+05 
+
+
+# > #
+kgw <- genFigwtac.genuswise(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = FALSE
+                  )
+kgw$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  9.714759e-01   9.866400e-01   4.043053e+00   1.154305e-01   2.151454e+01   1.110338e+00   1.691294e+04
+ #just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof
+  #5.929356e+05   1.341746e+04   1.004300e+06   2.317600e+04   2.317700e+04   2.280400e+04   2.317700e+04
+      #just.aic       full.aic 
+  #1.070909e+05   9.227473e+04 
+
+
+
+# ---------------Dada2 --------------------------------------------
+obj <- dfs$MBQCHLB.Dada2
+gut.si<- grep( "Artificial Gut", pData(obj)$V27  )
+oral.si <- grep( "Artificial Oral", pData(obj)$V27  )
+grp <- rep( "other", ncol( obj ) )
+grp[ oral.si ] <- "Oral"
+grp[ gut.si ] <- "Gut"
+pData(obj)$group <- factor(grp)
+
+des <- model.matrix( ~group , data=pData(obj) )
+
+#sample-wide
+kd <- genFigwgtac(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = TRUE
+                  )
+kd$tab
+#    just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  9.967315e-01   9.976854e-01   2.934476e+00   5.839489e-01   5.696658e+00   1.190586e+00   1.955201e+02
+# just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof
+#  5.981976e+04   1.887954e+02   8.156666e+04   1.850000e+02   1.860000e+02   1.820000e+02   1.860000e+02
+#      just.aic       full.aic 
+#  2.071004e+03   1.948350e+03 
+  
+#no depth only
+k <- genFigwgtac(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = FALSE
+                  )
+k$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  9.985841e-01   9.990300e-01   3.078726e+01   8.512853e+00   1.119950e+02   4.031246e+01   1.928749e+02
+# just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof
+#  1.362183e+05   1.609950e+02   1.659658e+05   1.850000e+02   1.860000e+02   1.820000e+02   1.860000e+02
+#      just.aic       full.aic 
+#  1.674851e+03   1.500338e+03 
+
+#genus-specific
+kgwd <- genFigwtac.genuswise(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = TRUE
+                  )
+kgwd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  4.072482e-01   7.348470e-01   5.353618e+00   4.027806e-01   5.001120e+04   2.043525e+05   9.473336e+03
+# just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof
+#  1.598196e+04   5.925843e+03   2.234877e+04   1.236500e+04   1.236600e+04   1.206600e+04   1.236600e+04
+#    just.aic       full.aic 
+#  4.223158e+04   3.571698e+04 
+
+
+# > #
+kgw <- genFigwtac.genuswise(mat=exprs(obj), 
+                    genus = fData(obj)$Genus, 
+                    grp = factor(grp), des=des, 
+                    depth.only = FALSE
+                  )
+kgw$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar just.resid.dev 
+#  6.090281e-01   8.172440e-01   1.574561e+01   2.407326e+00   9.802741e+04   3.320465e+05   7.641340e+03
+# just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof full.resid.dof  full.null.dof
+#  1.954447e+04   4.084466e+03   2.234929e+04   1.236500e+04   1.236600e+04   1.206500e+04   1.236600e+04
+#      just.aic       full.aic 
+#  3.820061e+04   3.387737e+04 
+
+
+
+
+
+```
+
+Time series
+```{r}
+alm.AF <- readRDS( file="./data/alm.AF.RDS" )
+des <- model.matrix( ~group , data=pData(alm.AF) )
+grp <- pData(alm.AF)$group
+
+#sample-wide
+kd <- genFigwgtac(mat=exprs(alm.AF), 
+                    genus = fData(alm.AF)$taxonomy6, 
+                    grp = grp, des=des, 
+                    depth.only = TRUE
+                  )
+kd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.994627e-01   9.994753e-01   1.935139e+01   4.187101e+00   2.333675e+01   5.233913e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.971700e+02   3.669626e+05   2.026427e+02   3.861881e+05   1.900000e+02   1.910000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  1.870000e+02   1.910000e+02   2.196387e+03   2.174427e+03 
+
+# > #
+k <- genFigwgtac(mat=exprs(alm.AF), 
+                    genus = fData(alm.AF)$taxonomy6, 
+                    grp = grp, des=des, 
+                    depth.only = FALSE
+                  )
+k$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.995245e-01   9.995584e-01   3.522958e+01   8.180362e+00   1.447162e+02   4.796762e+01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.030848e+02   4.270560e+05   2.396913e+02   5.428372e+05   1.900000e+02   1.910000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  1.870000e+02   1.910000e+02   2.097192e+03   1.923840e+03 
+
+#genus-specific
+kgwd <- genFigwtac.genuswise(mat=exprs(alm.AF), 
+                    genus = fData(alm.AF)$taxonomy6, 
+                    grp = grp, des=des, 
+                    depth.only = TRUE
+                  )
+kgwd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  7.752220e-01   9.722347e-01   5.748290e-01   1.586410e-02   9.742077e+00   6.886150e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  9.661712e+03   4.298335e+04   5.317649e+03   1.915214e+05   8.840000e+03   8.841000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  8.529000e+03   8.841000e+03   5.242052e+04   3.465698e+04
+
+
+# > #
+kgw <- genFigwtac.genuswise(mat=exprs(alm.AF), 
+                    genus = fData(alm.AF)$taxonomy6, 
+                    grp = grp, des=des, 
+                    depth.only = FALSE
+                  )
+kgw$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.443012e-01   9.845963e-01   2.645291e+00   1.115915e-01   7.479179e+01   1.542565e+01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  6.434072e+03   1.155155e+05   4.145451e+03   2.691199e+05   8.840000e+03   8.841000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  8.528000e+03   8.841000e+03   3.940066e+04   3.081297e+04 
+
+
+#incidence  
+pdf( file="./results/images/incidence_alm.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(1,2), mar=c(4, 6,2,1), pty='s')
+z <- pltQGWise( alm.AF, genusLab="taxonomy6", dsname = "Time Series, " )
+dev.off()
+median( z$X50.[ z$ygplus>quantile( z$ygplus, .75 ) ] ) #.03645
+
+rm(kgwd, kd, psu, alm.AF, kgw, kgwd)
+```
+
+
+Wastewater
+```{r}
+load( file="./data/wastewater/wastewater.rdata" ) #loads wastewaterMRobj
+ww <- convertMRtoES(wastewaterMRobj)
+stfs <-  c("1_Influent", "Effluent", "Before_UV", "After_UV", "Pond",  "Inlet_pumphouse"  )
+si <- which( pData( ww )$Sample_Type %in% stfs )
+so <- ww[,si]
+pData(so)$Sample_Type <- factor( pData(so)$Sample_Type, levels=stfs )
+des <- model.matrix( ~Sample_Type , data=pData(so) )
+grp <- pData(so)$Sample_Type
+
+#Sample-wise
+kwd <- genFigwgtac(
+                  mat=exprs(so), genus = fData(so)$genus, 
+                  grp = grp, des=des, 
+                  depth.only=TRUE
+                  )
+kwd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.993781e-01   9.994973e-01   4.123685e+00   1.541088e+00   6.136202e+00   2.321345e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  6.043514e+01   9.718502e+04   5.854415e+01   1.164517e+05   5.700000e+01   5.800000e+01 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  5.100000e+01   5.800000e+01   7.271281e+02   7.152690e+02 
+  
+# > #
+kw <- genFigwgtac(
+                  mat=exprs(so), genus = fData(so)$genus, 
+                  grp = grp, des=des,depth.only=FALSE
+                  )
+kw$tab
+# just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.996144e-01   9.997091e-01   9.788955e+00   3.691090e+00   3.141206e+01   1.368060e+01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  5.403024e+01   1.401372e+05   5.827139e+01   2.002850e+05   5.700000e+01   5.800000e+01 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  5.100000e+01   5.800000e+01   6.738411e+02   6.322150e+02 
+
+
+#Genus-wise
+kwgwd <- genFigwtac.genuswise(
+                  mat=exprs(so), genus = fData(so)$genus, 
+                  grp = grp, des=des, depth.only = TRUE
+                  )
+kwgwd$tab
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  6.891881e-01   9.042118e-01   8.084300e-01   2.805522e-02   3.138344e+00   1.668412e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  6.708007e+03   2.158220e+04   4.633192e+03   4.836914e+04   6.706000e+03   6.707000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  6.289000e+03   6.707000e+03   3.431288e+04   2.741185e+04 
+
+
+kwgwd.quad <- genFigwtac.genuswise(
+                  mat=exprs(so), genus = fData(so)$genus, 
+                  grp = grp, des=des, depth.only = TRUE, quad.depth = TRUE
+                  )
+kwgwd.quad$tab
+
+# > #
+kwgw <- genFigwtac.genuswise(
+                  mat=exprs(ww), genus = fData(ww)$genus, 
+                  grp = grp, des=des, depth.only=FALSE
+                  )
+kwgw$tab
+#    just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.169510e-01   9.550803e-01   3.850313e+00   1.906478e-01   1.197872e+01   1.113414e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  6.558627e+03   7.897297e+04   3.510465e+03   7.814988e+04   9.605000e+03   9.606000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  6.288000e+03   6.707000e+03   3.740014e+04   2.368192e+04 
+
+#incidence 
+pdf( file="./results/images/incidence_ww.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(1,2), mar=c(4, 6,2,1), pty='s')
+z <- pltQGWise( ww, genusLab="genus", dsname = "Time Series, " )
+dev.off()
+median( z$X50.[ z$ygplus>quantile( z$ygplus, .75 ) ] ) #[1] 0.09195402
+
+rm( kwd, kwgwd, kwgw,kw )
+```
+
+
+
+PIH100
+```{r}
+psu <-list()
+psu$fst99 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_99_SILVA132.RDS")
+psu$fst97 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_97_SILVA132.RDS")
+psu$dada <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime2_Jan2021/PIH_CSF_First100_Dada2_SILVA132.RDS")
+
+#Sample-wise 
+for( obj in psu  ){
+  pData(obj)$Sample_Def <- factor(pData(obj)$Sample_Def, levels=c("CaseControl", "Case", "LabControl"))
+  grp <- pData(obj)$Sample_Def
+  des <- model.matrix( ~ Sample_Def, data = pData(obj) )
+  kpsud <- genFigwgtac(mat=exprs(obj), 
+                         genus = fData(obj)$Genus, 
+                         grp = grp, des=des, 
+                         depth.only=TRUE
+  )
+  print(kpsud$tab)
+}
+# FST99
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.994718e-01   9.995439e-01   8.639086e+00   2.287982e+00   1.196481e+01   3.207337e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.300016e+02   2.461246e+05   1.263154e+02   2.769517e+05   1.240000e+02   1.250000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  1.210000e+02   1.250000e+02   1.420837e+03   1.385257e+03 
+
+#FST97
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.983142e-01   9.987381e-01   4.626533e+00   1.181472e+00   8.290477e+00   2.173219e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.316871e+02   7.811403e+04   1.254504e+02   9.941069e+04   1.240000e+02   1.250000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  1.210000e+02   1.250000e+02   1.383250e+03   1.313341e+03 
+
+#Dada2
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.945961e-01   9.958012e-01   4.383551e+00   1.146530e+00   7.287724e+00   1.992749e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.285515e+02   2.378871e+04   1.224435e+02   2.916153e+04   1.240000e+02   1.250000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  1.210000e+02   1.250000e+02   1.164658e+03   1.107359e+03 
+
+# > #
+for( obj in psu  ){
+  pData(obj)$Sample_Def <- factor(pData(obj)$Sample_Def, levels=c("CaseControl", "Case", "LabControl"))
+  grp <- pData(obj)$Sample_Def
+  des <- model.matrix( ~ Sample_Def, data = pData(obj) )
+  kpsud <- genFigwgtac(mat=exprs(obj), 
+                         genus = fData(obj)$Genus, 
+                         grp = grp, des=des
+  )
+  print(kpsud$tab)
+}
+
+# FST99
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.994376e-01   9.995329e-01   6.622467e+00   1.650756e+00   1.032769e+01   2.660322e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.245086e+02   2.213849e+05   1.228396e+02   2.629748e+05   1.240000e+02   1.250000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  1.210000e+02   1.250000e+02   1.447098e+03   1.398758e+03 
+
+#FST97
+#      just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.989609e-01   9.990731e-01   1.468046e+01   4.138588e+00   2.457301e+01   7.746754e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.252510e+02   1.205325e+05   1.288039e+02   1.389575e+05   1.240000e+02   1.250000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  1.210000e+02   1.250000e+02   1.242934e+03   1.198876e+03 
+
+#Dada2
+#      just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.973230e-01   9.973252e-01   2.164681e+01   6.818966e+00   2.232643e+01   7.126144e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.068134e+02   3.990094e+04   1.074564e+02   4.017345e+04   1.240000e+02   1.250000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  1.210000e+02   1.250000e+02   9.801072e+02   9.841505e+02 
+
+
+#Genus-wise 
+for( obj in psu  ){
+  pData(obj)$Sample_Def <- factor(pData(obj)$Sample_Def, levels=c("CaseControl", "Case", "LabControl"))
+  grp <- pData(obj)$Sample_Def
+  des <- model.matrix( ~ Sample_Def, data = pData(obj) )
+  kpsugwd <- genFigwtac.genuswise(mat=exprs(obj), 
+                         genus = fData(obj)$Genus, 
+                         grp = grp, des=des, 
+                         depth.only=TRUE
+  )
+  print(kpsugwd$tab)
+}
+#FST99
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  8.986425e-01   9.510875e-01   5.210939e-01   2.146894e-02   1.106627e+00   5.405983e-02 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  4.070103e+03   4.015590e+04   3.454225e+03   7.062055e+04   3.600000e+03   3.601000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  3.280000e+03   3.601000e+03   2.342728e+04   2.094072e+04 
+#FST97
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  8.067399e-01   9.122751e-01   7.954339e-01   3.679303e-02   2.010448e+00   1.221908e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  3.685299e+03   1.906911e+04   3.032797e+03   3.457166e+04   3.580000e+03   3.581000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  3.290000e+03   3.581000e+03   2.017597e+04   1.764821e+04 
+#Dada2
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  7.347832e-01   8.252996e-01   2.933379e+00   2.566080e-01   5.941482e+00   6.920911e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.033352e+03   7.666755e+03   1.717061e+03   9.828602e+03   2.482000e+03   2.483000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.178000e+03   2.483000e+03   1.066988e+04   1.026357e+04 
+
+# > # 
+for( obj in psu  ){
+  pData(obj)$Sample_Def <- factor(pData(obj)$Sample_Def, levels=c("CaseControl", "Case", "LabControl"))
+  grp <- pData(obj)$Sample_Def
+  des <- model.matrix( ~ Sample_Def, data = pData(obj) )
+  kpsugw <- genFigwtac.genuswise(mat=exprs(obj), 
+                         genus = fData(obj)$Genus, 
+                         grp = grp, des=des, depth.only = FALSE
+  )
+  print(kpsugw$tab)
+}
+#FST99
+#      just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.776646e-01   9.890178e-01   2.997598e+00   2.015942e-01   1.004001e+01   9.882849e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.866847e+03   1.283545e+05   2.331954e+03   2.123388e+05   3.600000e+03   3.601000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  3.279000e+03   3.601000e+03   1.735134e+04   1.573857e+04 
+
+#FST97 
+#     just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.403970e-01   9.732308e-01   3.282787e+00   2.318204e-01   2.090157e+01   3.336467e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.641532e+03   4.431878e+04   2.120679e+03   7.922071e+04   3.580000e+03   3.581000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  3.289000e+03   3.581000e+03   1.573995e+04   1.385579e+04 
+#Dada2
+#      just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  8.836624e-01   9.100965e-01   1.163638e+01   1.784276e+00   2.397701e+01   5.543293e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  1.343282e+03   1.154641e+04   1.161634e+03   1.292090e+04   2.482000e+03   2.483000e+03 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.177000e+03   2.483000e+03   8.862961e+03   9.026362e+03 
+
+
+rm(kpsugwd, kpsud, kpsugw, kpsud)
+
+
+pdf( file="./results/images/incidence_pih100.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(1,2), mar=c(4, 6,2,1), pty='s')
+for( nme in names(psu) ){
+  z <- pltQGWise( psu[[nme]], genusLab="Genus", dsname = paste0(nme, ", " ) )  
+  print( median( z$X50.[ z$ygplus>quantile( z$ygplus, .75 ) ] ) ) #fst.99,fst.97, dada = .008, .016, .008
+}
+
+dev.off()
+
+
+rm( psu )
+
+```
+
+
+MBQC - selectively looking at mocks
+```{r}
+dfs <- list()
+dfs$fst99 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb99.RDS" )
+dfs$fst97 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb97.RDS" )
+dfs$dada2 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/dada.RDS" )
+
+pdf( file="./results/images/MBQC_artGut.pdf", useDingbats = FALSE, width = round(6/.72, 2), height=6 )
+op <- par(mfrow=c(1,3), pty='s')
+for( obj in dfs ) {
+  si<- grep( "Artificial Gut", pData(obj)$V27  )
+  df <- prokounter::getProkounterTrends( exprs(obj[,si]), 
+                                           genus = fData(obj[,si])$Genus, 
+                                           plt=FALSE, fit.proc="ss" )$df;   
+  
+  ng <- length( df$g )
+  cc <- prokounter:::.getColsForFactors( factor( df$g, levels=unique(df$g) ), set="Set3" )
+  plot( df$lm ~ df$lr, col = cc$cols, xlab = "Log Recovered Abundance", ylab = "Log Num. Taxa" )
+  abline( h=0 )
+}
+dev.off()
+
+pdf( file="./results/images/MBQC_artOral.pdf",useDingbats = FALSE, width=round(6/.72,2), height=6 )
+op <- par(mfrow=c(1,3), pty='s')
+for( obj in dfs ) {
+  si<- grep( "Artificial Oral", pData(obj)$V27  )
+  df <- prokounter::getProkounterTrends( exprs(obj[,si]), 
+                                           genus = fData(obj[,si])$Genus, 
+                                           plt=FALSE, fit.proc="ss" )$df;   
+  
+  ng <- length( df$g )
+  cc <- prokounter:::.getColsForFactors( factor( df$g, levels=unique(df$g) ), set="Set3" )
+  plot( df$lm ~ df$lr, col = cc$cols, xlab = "Log Recovered Abundance", ylab = "Log Num. Taxa" )
+  abline( h=0 )
+}
+dev.off()
+
+pdf( file="./results/images/MBQC_full.pdf",useDingbats = FALSE, width=round(6/.72,2), height=6 )
+op <- par(mfrow=c(1,3), pty='s')
+for( obj in dfs ) {
+  df <- prokounter::getProkounterTrends( exprs(obj), 
+                                           genus = fData(obj)$Genus, 
+                                           plt=FALSE, fit.proc="ss" )$df;   
+  
+  ng <- length( df$g )
+  cc <- prokounter:::.getColsForFactors( factor( df$g, levels=unique(df$g) ), set="Set3" )
+  plot( df$lm ~ df$lr, col = cc$cols, xlab = "Log Recovered Abundance", ylab = "Log Num. Taxa" )
+  abline( h=0 ) #plotting without the trend lines, as we need all data to draw that plot. Not just a subset
+}
+dev.off()
+
+
+```
+
+
+Pseudo
+```{r}
+dfs <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+
+
+#sample-wise 
+for( obj in dfs  ){
+  k <- obj
+  grp <- factor( pData(k)$ncells, levels = sort( unique( pData(k)$ncells ) ) )
+  des <- model.matrix( ~cycles + log(ncells), data=pData(k) )
+  kpseudo.d <- genFigwgtac(mat=exprs(k), 
+                         genus = fData(k)$Genus, 
+                         grp = grp, des=des, 
+                         depth.only=TRUE
+  )
+  print(kpseudo.d$tab)
+  
+}
+
+#dfs$FST99 
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.996111e-01   9.997629e-01   8.013315e+00   4.369571e+00   3.426219e+01   2.058032e+01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.692667e+01   6.922956e+04   2.588496e+01   1.091878e+05   2.800000e+01   2.900000e+01 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.500000e+01   2.900000e+01   3.431830e+02   3.131332e+02 
+
+
+#dfs$FST97
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.991817e-01   9.995115e-01   6.976558e+00   3.972589e+00   3.356914e+01   2.125689e+01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.871835e+01   3.509630e+04   2.800534e+01   5.732443e+04   2.800000e+01   2.900000e+01 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.500000e+01   2.900000e+01   3.219709e+02   2.900369e+02
+
+#dfs$Dada2
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#     0.9960108      0.9969345      9.0456249      5.9492601     17.6684608     12.4479849 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#    29.5014069   7395.2558592     27.4769082   8963.3689334     28.0000000     29.0000000 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#    25.0000000     29.0000000    244.7719066    234.7742940 
+
+# > #
+for( obj in dfs  ){
+  k <- obj
+  grp <- factor( pData(k)$ncells, levels = sort( unique( pData(k)$ncells ) ) )
+  des <- model.matrix( ~cycles + log(ncells), data=pData(k) )
+  kpseudo <- genFigwgtac(mat=exprs(k), 
+                         genus = fData(k)$Genus, 
+                         grp = grp, des=des, 
+                         depth.only=FALSE
+  )
+  print(kpseudo$tab)
+}
+
+# -- FST99
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.997455e-01   9.997871e-01   2.731592e+01   1.644175e+01   7.757087e+01   5.428537e+01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.622377e+01   1.030563e+05   2.770393e+01   1.301404e+05   2.800000e+01   2.900000e+01 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.500000e+01   2.900000e+01   3.126316e+02   2.974112e+02 
+
+# -- FST97
+#      just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.993608e-01   9.995324e-01   1.259400e+01   7.548305e+00   5.178781e+01   3.705013e+01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.784960e+01   4.356703e+04   2.942935e+01   6.293883e+04   2.800000e+01   2.900000e+01 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.500000e+01   2.900000e+01   3.064053e+02   2.823722e+02 
+
+# -- Dada2 
+#     just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.982922e-01   9.983567e-01   5.031955e+02   1.933788e+03   5.869939e+02   2.512655e+03 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  2.188447e+01   1.281432e+04   2.112907e+01   1.285792e+04   2.800000e+01   2.900000e+01 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  2.500000e+01   2.900000e+01   1.872317e+02   1.920169e+02 
+
+
+# ---GENUS_WISE
+for( obj in dfs  ){
+  k <- obj
+  grp <- factor( pData(k)$ncells, levels = sort( unique( pData(k)$ncells ) ) )
+  des <- model.matrix( ~cycles + log(ncells), data=pData(k) )
+  kpseudogwd <- genFigwtac.genuswise(mat=exprs(k), 
+                         genus = fData(k)$Genus, 
+                         grp = grp, des=des, 
+                         depth.only=TRUE
+  )
+  print(kpseudogwd$tab)
+}
+
+# - FST99
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.335780e-01   9.853915e-01   4.360572e-01   4.290840e-02   2.532535e+00   3.730645e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  6.967014e+02   1.048902e+04   5.196319e+02   3.557059e+04   5.770000e+02   5.780000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  4.500000e+02   5.780000e+02   4.545648e+03   3.713342e+03 
+
+# - FST97
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  8.901338e-01   9.770247e-01   5.169005e-01   5.273339e-02   3.469650e+00   5.820022e-01 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  6.697348e+02   6.095910e+03   4.772567e+02   2.077260e+04   5.800000e+02   5.810000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  4.540000e+02   5.810000e+02   4.081016e+03   3.265344e+03 
+
+# - Dada2
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#     0.7598111      0.9125246      2.1040764      0.3676173     21.4433127     12.2372532 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#   433.6610203   1805.4995863    303.9291903   3474.4533053    473.0000000    474.0000000 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#   354.0000000    474.0000000   2280.9954902   2013.8408138
+
+# > #
+for( obj in dfs  ){
+  k <- obj
+  grp <- factor( pData(k)$ncells, levels = sort( unique( pData(k)$ncells ) ) )
+  des <- model.matrix( ~cycles + log(ncells), data=pData(k) )
+  kpseudogw <- genFigwtac.genuswise(mat=exprs(k), 
+                         genus = fData(k)$Genus, 
+                         grp = grp, des=des, depth.only = FALSE
+  )
+  print(kpseudogw$tab)
+}
+# --- FST99
+#just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.871428e-01   9.946185e-01   2.887483e+00   4.322648e-01   1.979158e+01   5.324074e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  4.902851e+02   3.813322e+04   4.207534e+02   7.818465e+04   5.770000e+02   5.780000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  4.490000e+02   5.780000e+02   3.380989e+03   3.071712e+03 
+
+# --- FST97
+#      just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#  9.748550e-01   9.892383e-01   2.807670e+00   4.304891e-01   1.667023e+01   4.635722e+00 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#  4.707146e+02   1.871999e+04   3.874403e+02   3.600180e+04   5.800000e+02   5.810000e+02 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#  4.530000e+02   5.810000e+02   3.076151e+03   2.823452e+03 
+
+# --- Dada2
+#      just.pr2       full.pr2     just.theta       just.bar     full.theta       full.bar 
+#     0.8926289      0.9377268      8.0574655      2.3934515    274.5937654   1294.1855468 
+#just.resid.dev  just.null.dev full.resid.dev  full.null.dev just.resid.dof  just.null.dof 
+#   313.9952453   2924.3918084    245.9035087   3948.7878254    473.0000000    474.0000000 
+#full.resid.dof  full.null.dof       just.aic       full.aic 
+#   353.0000000    474.0000000   1881.6190593   1889.1014144 
+
+rm(dfs, kpseudo.d, kpseudogwd, kpseudo, kpseudogw)
+
+#incidence
+pdf( file="./results/images/incidence_pseudomonas.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(1,2), mar=c(4, 6,2,1), pty='s')
+for( nme in names(dfs) ){
+  z <- pltQGWise( dfs[[nme]], genusLab="Genus", dsname = paste0(nme, ", " ) )  
+  print( median( z$X50.[ z$ygplus>quantile( z$ygplus, .75 ) ] ) ) #fst.99,fst.97, dada = .0345, .069, .034
+}
+
+dev.off()
+
+```
+
+
+
+# Silhouette scores
+```{r}
+
+getSilhouettes <- function( mat, genus, toig=c("g__", "unknown", "NA", "", "undef"), 
+                            lr.logged=FALSE, lm.logged=FALSE, ... ) {
+  require(cluster)
+  genus <- as.character(genus)
+  ug <- unique(genus)
+  gi <- which( ug %in% toig )
+  if(length(gi)>0){
+    ug <- ug[ -gi ]   
+  }
+  df <- do.call(rbind, lapply( ug, function(g) prokounter:::.getRecovAbPat( mat=mat, genus=genus, g=g)  ) )
+  df <- df[ is.finite(  df$lr ) & is.finite( df$lm ), ]
+  
+  if(!lr.logged)
+    df$lr <- exp( df$lr ) 
+  if(!lm.logged)
+    df$lm <- exp( df$lm ) 
+  
+  
+  k <- 25
+  qs <- quantile( df$lr, probs=seq(0, 1, by=1/k) )
+  qs <- sort( unique(qs) )
+  if( qs[length(qs)] !=max(df$lr) ){
+    qs <- c(qs, max(df$lr))
+  }
+  #plot( df$lm ~ df$lr )
+  #abline(v=qs)
+  
+  
+  brks <- cut( df$lr, breaks=qs )
+  gwise <- do.call(cbind, lapply( ug, function(gx){
+    y <- rep( 0, nlevels(brks) )
+    dfs <- subset( df, g==gx )
+    if(nrow(dfs)==0){
+      y <- rep(NA, nlevels(brks))
+    } else {
+      agg <- aggregate( dfs$lm, by=list( cut( dfs$lr, breaks = qs ) ), mean)
+      y[match( agg$Gr, levels(brks) )] <- as.numeric(agg$x)  
+    }
+    y
+  } ) )
+  rownames( gwise ) <- levels( brks )
+  
+  allna <- which( colSums( is.na(gwise) ) == nrow(gwise) )
+  if(length(allna)>0){
+    gwise <- gwise[, -allna ]  
+  }
+  
+  xx <- data.matrix(t(gwise))
+  xx <- sweep( xx, 2, colMeans( xx ), "-"  )
+  
+  clust.fn <- function( x, k, colIndxToConsider=seq(ncol(x)) ){
+    cls <- hclust( dist( x[,colIndxToConsider] ) )
+    mems <- cutree(cls, h=k)
+    list( "cluster"=mems )
+  }
+  
+  getMinK <- function( xx, colIndx2Cons = seq(ncol(xx)) , plt=FALSE  ){
+    d <- dist( xx[,colIndx2Cons,drop=FALSE] )
+    cls <- hclust( d ) 
+    Ks <- seq(nrow(xx))
+    vals <- sapply( Ks, function(k){
+      sil <- silhouette( cutree(cls,h=k),d)
+      tryCatch({mean( sil[,3] )},
+               error=function(e){
+                 print(e);print("All gs merged."); NA
+               })
+      
+    })
+    
+    if(plt){
+      
+      indx <- which( is.na(vals) )
+      if(length(indx)>0){
+        Ks <- Ks[-indx]
+        vals <- vals[-indx]  
+      }
+      plot( vals ~ Ks, xlab  = "Number of clusters", ylab = "Average silhouette width", main=paste0("Number of genera: ", nrow(xx) ))
+      abline( v=which.min( vals ) )
+      
+    }
+    
+    which.min( vals )
+  }
+  
+  mink.first <- getMinK( xx, ...  ) 
+  
+  mink.byRwindow <- sapply( seq(ncol(xx)), function(j){
+    getMinK( xx, colIndx2Cons = seq(j,ncol(xx)), plt=FALSE )
+  } )
+  
+  list( "mink.allRAwindows"=mink.first,
+        "mink.byRAwindows"=mink.byRwindow
+        )
+}
+
+getDomGenera <- function( mat, genus, toig=c("g__", "unknown", "NA", "", "undef"), ...  ){
+  genus <- as.character(genus)
+  ug <- unique(genus)
+  gi <- which( ug %in% toig )
+  if(length(gi)>0){
+    ug <- ug[ -gi ]   
+  }
+  h <- sapply( ug, function(g){
+    sum( colSums( mat[which( genus == g ),,drop=FALSE] ) )
+  } )
+  h <- sort( h, decreasing=TRUE )
+  h <- h[ h!=0 ]
+  barplot( log2(h), ylab = "Log2 Total Recovered Abundance", ...  )
+  log2(h)
+}
+
+```
+
+
+Applications
+
+Mouse 
+```{r}
+# ---- Mouse : number of genera 60
+data(mouseData)
+mouse <- convertMRtoES(mouseData)
+
+op <- par(mfrow=c(1,1))
+d <- getDomGenera( mat=exprs(mouse), genus=as.character(fData(mouse)$genus), cex.names=.5,las=2 )
+
+
+mouse.unlog <- getSilhouettes( mat=exprs( mouse ),  genus=as.character( fData(mouse)$genus ), plt=TRUE, lr.logged = FALSE, lm.logged = FALSE )
+#$mink.allRAwindows
+#[1] 2
+#$mink.byRAwindows
+#[1]  2  1  1  1  1  1  2  1  1  1  1  1 12  1  1  1  1  1
+
+mouse.log <- getSilhouettes( mat=exprs( mouse ),  genus=as.character( fData(mouse)$genus ), plt=TRUE, lr.logged = TRUE, lm.logged = TRUE )
+#$mink.allRAwindows
+#[1] 1
+#$mink.byRAwindows
+# [1] 1 4 1 4 4 4 4 4 6 5 5 4 4 3 1 5 5 1
+
+```
+
+MBQC
+```{r}
+dfs <- list()
+dfs$MBQCHLB.FST99 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb99.RDS" )
+dfs$MBQCHLB.FST97 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb97.RDS" )
+dfs$MBQCHLB.Dada2 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/dada.RDS" )
+
+sapply( dfs, function(x) length( unique(fData(x)$Genus ) ) )
+
+for(obj in dfs){
+  obj.unlog <- getSilhouettes( mat=exprs( obj ),  genus=as.character( fData(obj)$Genus ), plt=TRUE, lr.logged = FALSE, lm.logged = FALSE )
+  print(obj.unlog)  
+}
+
+#FST99 : unlogged
+#$mink.allRAwindows
+#[1] 3
+#$mink.byRAwindows
+# [1]   3   3   5   5   3   4   4   3   2   1   1   1   1   4   1   1   1   1   1 201
+
+#FST97 :  unlogged
+#$mink.allRAwindows
+#[1] 3
+#$mink.byRAwindows
+# [1]   3   3   5   3   5   3   3   5   2   1   1   1   1   1   1   1  66   1  59 100
+
+
+#Dada2: unlogged
+#$mink.allRAwindows
+#[1] 2
+#$mink.byRAwindows
+# [1] 2 3 4 3 5 3 7 6 5 4 4 5 5 6 4 5 7 5 5 5 4 4 5 5 2
+
+
+for(obj in dfs){
+  obj.log <- getSilhouettes( mat=exprs( obj ),  genus=as.character( fData(obj)$Genus ), plt=TRUE, lr.logged = TRUE, lm.logged = TRUE )
+  print(obj.log)  
+}
+#FST99
+#$mink.allRAwindows
+#[1] 10
+#$mink.byRAwindows
+# [1] 10 10  1  1  1 10  1  1 10  1 10 10  5  6  9 10  9  8  6  2
+
+#FST97
+#$mink.allRAwindows
+#[1] 2
+#$mink.byRAwindows
+# [1] 2 1 2 1 1 2 2 2 1 1 9 7 3 5 7 8 9 7 6 2
+
+#Dada2
+#$mink.allRAwindows
+#[1] 1
+#$mink.byRAwindows
+# [1] 1 1 1 1 1 1 1 1 2 2 2 2 2 1 1 4 1 3 2 2 2 2 2 2 1
+```
+
+
+Pseudomonas study
+```{r}
+dfs <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+
+par(mfrow=c(1,1), mar=c(8,4,2,1))
+for( obj in dfs ){
+  d <- getDomGenera( mat=exprs(obj), genus=as.character(fData(obj)$Genus), cex.names=.25,las=2 )
+}
+
+# --- FST 99 : Ngenera: 125
+pseudo.unlog <- getSilhouettes( mat=exprs( dfs$FST.99 ),  genus=as.character( fData(dfs$FST.99)$Genus ), plt=TRUE )
+#$mink.allRAwindows
+#[1] 8
+#$mink.byRAwindows
+#[1]  8  8  8  6  8  8  8  8  5  7 14  7 11  1  9  1  1 13  1  2  1  1  1  1
+
+pseudo.logged <- getSilhouettes( mat=exprs( dfs$FST.99 ),  genus=as.character( fData(dfs$FST.99)$Genus ), plt=TRUE, lr.logged = TRUE, lm.logged = TRUE )
+#$mink.allRAwindows
+#[1] 4
+#$mink.byRAwindows
+#[1] 4 4 4 4 4 4 2 4 4 5 5 4 4 7 7 7 5 6 5 5 6 7 6 1
+
+# --- FST 97 : Ngenera : 124
+pseudo.unlog <- getSilhouettes( mat=exprs( dfs$FST.97 ),  genus=as.character( fData(dfs$FST.97)$Genus ), plt=TRUE )
+#$mink.allRAwindows
+#[1] 2
+#$mink.byRAwindows
+# [1]  2  2  3  3  5  3  5  5  5  4 10  9 10 10 10 10  9 10 11 10  8  1  1  1
+
+pseudo.logged <- getSilhouettes( mat=exprs( dfs$FST.97 ),  genus=as.character( fData(dfs$FST.97)$Genus ), plt=TRUE, lr.logged = TRUE, lm.logged = TRUE )
+#$mink.allRAwindows
+#[1] 3
+#$mink.byRAwindows
+#[1] 3 3 3 3 3 3 3 3 3 3 3 3 3 5 5 5 5 6 6 5 5 6 5 1
+
+# -- Dada2 : Ngenera : 117
+pseudo.unlog <- getSilhouettes( mat=exprs( dfs$Dada2 ),  genus=as.character( fData(dfs$Dada2)$Genus ), plt=TRUE )
+#$mink.allRAwindows
+#[1] 5
+#$mink.byRAwindows
+# [1]  5  5  5  5  5  5  5  5  6  5  7  8  8  6  6  6  9  7 11 10  9  8  8 22  9
+
+pseudo.logged <- getSilhouettes( mat=exprs( dfs$Dada2 ),  genus=as.character( fData(dfs$Dada2)$Genus ), plt=TRUE, lr.logged = TRUE, lm.logged = TRUE )
+#$mink.allRAwindows
+#[1] 3
+#$mink.byRAwindows
+# [1] 3 3 3 3 2 2 2 2 2 2 3 3 3 3 2 2 3 4 3 1 3 2 2 1 1
+```
+
+# PIH100 
+```{r}
+psu <-list()
+psu$fst99 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_99_SILVA132.RDS")
+psu$fst97 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_97_SILVA132.RDS")
+psu$dada <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime2_Jan2021/PIH_CSF_First100_Dada2_SILVA132.RDS")
+
+par(mfrow=c(1,1), mar=c(8,4,2,1))
+for( obj in psu){
+  d <- getDomGenera( mat=exprs(obj), genus=as.character(fData(obj)$Genus), cex.names=.25,las=2 )
+}
+
+
+for( obj in psu  ){
+  psu.unlog <- getSilhouettes( mat=exprs( obj ),  genus=as.character( fData(obj)$Genus ), plt=TRUE )
+  psu.logged <- getSilhouettes( mat=exprs( obj ),  genus=as.character( fData(obj)$Genus ), plt=TRUE, 
+                                lr.logged = TRUE, lm.logged = TRUE )
+  print( psu.unlog )
+  print(psu.logged)
+  readline()
+}
+# --- FST99 : Ngenera : 318
+
+# (1) unlogged
+#$mink.allRAwindows
+#[1] 5
+#$mink.byRAwindows
+#[1]  5  5  5  5  5  6  6  6  6  5  4  4  4 10  3 10  9  9  3  3  1  1
+
+# (2) logged
+#$mink.allRAwindows
+#[1] 3
+#$mink.byRAwindows
+#[1] 3 3 3 3 2 4 2 4 4 4 4 3 2 4 4 3 5 4 4 6 5 1
+
+# --- FST97 : Ngenera : 288
+#(1) unlogged
+#$mink.allRAwindows
+#[1] 6
+#mink.byRAwindows
+#[1]  6  4  4  4  6  6  3  4  6  5  3  7  5  4  4  7  5  7 12 25 51
+#(2) logged
+#mink.allRAwindows
+#[1] 2
+#mink.byRAwindows
+#[1] 2 2 2 2 2 2 2 3 3 3 3 3 2 3 3 3 3 3 4 5 2
+
+# -- Dada2 : Ngenera 302
+# (1) unlogged
+#$mink.allRAwindows
+#[1] 6
+#$mink.byRAwindows
+# [1]  6  6  5  6  6  6  9  6  6  6  6  6  6  6 10 11 11 11 11 10  5  3 17 13  8
+
+# (2) logged
+#$mink.allRAwindows
+#[1] 2
+#$mink.byRAwindows
+#[1] 2 2 2 2 2 2 2 2 2 2 2 2 2 3 4 3 3 3 3 3 4 5 5 4 3
+```
+
+# MSD : FST99 : Ngenera : 163
+```{r}
+library( msd16s )
+msd <- convertMRtoES(msd16s)
+
+d <- getDomGenera( mat=exprs(msd), genus=as.character(fData(msd)$genus), cex.names=.25,las=2 )
+sum( d > quantile( d, .75  ) )
+
+msd.unlog <- getSilhouettes( mat=exprs( msd ),  genus=as.character( fData(msd)$genus ), plt=TRUE )
+msd.logged <- getSilhouettes( mat=exprs( msd ),  genus=as.character( fData(msd)$genus ), plt=TRUE, 
+                                lr.logged = TRUE, lm.logged = TRUE )
+# (1) unlogged
+#$mink.allRAwindows
+#[1] 2
+#$mink.byRAwindows
+#[1] 2 2 1 1 3 3 2 3 3 3 1 2 1 2 1 1 1
+
+# (2) logged
+#$mink.allRAwindows
+#[1] 1
+#$mink.byRAwindows
+# [1] 1 1 2 1 2 1 2 1 2 3 2 2 3 7 6 5 2
+```
+
+# Time series : Ngenera : 309
+```{r}
+alm.AF <- readRDS( file="./data/alm.AF.RDS" )
+
+d <- getDomGenera( mat=exprs(alm.AF), genus=as.character(fData(alm.AF)$taxonomy6), cex.names=.25,las=2 )
+
+alm.unlog <- getSilhouettes( mat=exprs( alm.AF ),  genus=as.character( fData(alm.AF)$taxonomy6 ), plt=TRUE )
+alm.logged <- getSilhouettes( mat=exprs( alm.AF ),  genus=as.character( fData(alm.AF)$taxonomy6 ), plt=TRUE, 
+                                lr.logged = TRUE, lm.logged = TRUE )
+# (1) unlogged
+#$mink.allRAwindows
+#[1] 3
+#$mink.byRAwindows
+#[1]  3  3  3  3  3  4  3  5  9  5  1  1  4  6 11  5  2  5  1
+
+# (2) logged
+#$mink.allRAwindows
+#[1] 2
+#$mink.byRAwindows
+# [1] 2 2 2 2 2 2 3 3 3 2 2 5 4 5 3 3 6 4 2
+```
+
+#Wastewater : Ngenera : 412 
+```{r}
+
+load( file="./data/wastewater/wastewater.rdata" ) #loads wastewaterMRobj
+ww <- convertMRtoES(wastewaterMRobj)
+stfs <-  c("1_Influent", "Effluent", "Before_UV", "After_UV", "Pond",  "Inlet_pumphouse"  )
+si <- which( pData( ww )$Sample_Type %in% stfs )
+so <- ww[,si]
+pData(so)$Sample_Type <- factor( pData(so)$Sample_Type, levels=stfs )
+
+d <- getDomGenera( mat=exprs(so), genus=as.character(fData(so)$genus), cex.names=.25,las=2 )
+exp( quantile( d, .75  ) )
+sum( d >  quantile( d, .75  ) )
+
+so.unlog <- getSilhouettes( mat=exprs( so ),  genus=as.character( fData(so)$genus ), plt=TRUE )
+so.logged <- getSilhouettes( mat=exprs( so ),  genus=as.character( fData(so)$genus ), plt=TRUE, 
+                                lr.logged = TRUE, lm.logged = TRUE )
+# (1) unlogged
+#$mink.allRAwindows
+#[1] 4
+#$mink.byRAwindows
+#[1]  4  4  3  3  3  3  3  4  5  3  3  6  4  8  4 11  8 17  8 15
+
+# (2) logged
+#$mink.allRAwindows
+#[1] 2
+#$mink.byRAwindows
+# [1] 2 2 2 2 2 7 2 2 2 2 2 2 6 2 5 5 4 4 4 2
+```
+

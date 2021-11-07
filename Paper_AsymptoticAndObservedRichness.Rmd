@@ -1,0 +1,296 @@
+---
+title: "Paper_AsymptoticVsObservedRichness.Rmd"
+author: "M. Senthil Kumar"
+date: "7/18/2021"
+output: html_document
+---
+```{r}
+require(metagenomeSeq)
+require(matrixStats)
+require(metagenomeSeq)
+require(portra50)
+require(matrixStats)
+require(MASS)
+require(prokounter)
+require(breakaway)
+
+source('~/Documents/research/StatisticalAnalysisProjects/NSPSU/utils.R')
+source('~/Documents/research/intensityBias/src/otherDivsCalls.R')
+```
+
+#Observed and asymptotic richnesses in empirical comparisons
+
+Some functionts for plotting observed and projected richness. 
+```{r}
+pltDivVsFtrs <- function(pkdf){
+  cc <- prokounter:::.getColsForFactors( factor( pkdf$g, levels=unique(pkdf$g) ), set="Set3" )  
+  op <- par(mfrow=c(1,2), pty='s')
+  plot( log(pkdf$chao1) ~ pkdf$lm, col =cc$cols , xlab = "Log Observed Richness", ylab = "Log Chao1"  )
+  x <- round( cor(log(pkdf$chao1), pkdf$lm  , use="complete.obs" ), digits = 3 )
+  legend( "topleft", legend=bquote( rho~"="~.(x)) )  
+  plot( log(pkdf$ace) ~ pkdf$lm, col =cc$cols, xlab = "Log Observed Richness", ylab = "Log ACE"  )
+  x <- round( cor(log(pkdf$ace), pkdf$lm  , use="complete.obs" ), digits = 3 )
+  legend( "topleft", legend=bquote( rho~"="~.(x)) )  
+  par(op)
+}
+
+pltDivVsFtrsSampleWide <- function(obj){
+  require(vegan)
+  lt <- log( colSums( exprs(obj) ) )
+  rich <- vegan::estimateR( t(exprs(obj)) )
+  op <- par(mfrow=c(1,2), pty='s')
+  cc <- getColsForFactors( factor( rep(1,ncol(obj)) ) )
+  plot( log(rich["S.chao1",]) ~ log(rich[1,]), col =cc$cols , xlab = "Log Observed Richness", ylab = "Log Chao1"  )
+  x <- round( cor(log(rich["S.chao1",]), log( rich[1,] ) , use="complete.obs" ), digits = 3 )  
+  legend( "topleft", legend=bquote( rho~"="~.(x) ) )
+  plot( log(rich["S.ACE",]) ~ log(rich[1,]), col =cc$cols , xlab = "Log Observed Richness", ylab = "Log ACE"  )
+  x <- round( cor(log(rich["S.ACE",]), log( rich[1,] ) , use="complete.obs" ), digits = 3 )  
+  legend( "topleft", legend=bquote( rho~"="~.(x)) )  
+  par(op)
+}
+
+```
+
+PIH100
+```{r}
+psu <-list()
+psu$fst99 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_99_SILVA132.RDS")
+psu$fst97 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_97_SILVA132.RDS")
+psu$dada2 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime2_Jan2021/PIH_CSF_First100_Dada2_SILVA132.RDS")
+
+all( colnames( psu$fst99 ) == colnames( psu$fst97 ) )
+ss <- match( colnames(psu$fst99 ), colnames(psu$fst97) )
+all( colnames( psu$fst99 ) == colnames( psu$fst97 )[ss] )
+psu$fst97 <- psu$fst97[,ss]
+
+
+pdf( file="./results/images/richnessTrackObservedRichnessPIH10099.pdf" )
+psupk <- prokounter( exprs(psu$fst99), genus=as.character(fData(psu$fst99)$Genus), fit.proc = "ss", plt = FALSE )
+pltDivVsFtrs( psupk$df )
+dev.off()
+
+pdf( file="./results/images/richnessTrackObservedRichnessPIH10097.pdf" )
+psupk <- prokounter( exprs(psu$fst97), genus=as.character(fData(psu$fst97)$Genus), fit.proc = "ss", plt = FALSE )
+pltDivVsFtrs( psupk$df )
+dev.off()
+
+pdf( file="./results/images/richnessTrackObservedRichnessPIH100Dada2.pdf" )
+psupk <- prokounter( exprs(psu$dada2), genus=as.character(fData(psu$dada2)$Genus), fit.proc = "ss", plt = FALSE )
+pltDivVsFtrs( psupk$df )
+dev.off()
+
+
+pdf( file="./results/images/SampleWideRichnessTrackingPIH10099.pdf" )
+pltDivVsFtrsSampleWide( psu$fst99 )
+dev.off()
+
+
+pdf( file="./results/images/SampleWideRichnessTrackingPIH10097.pdf" )
+pltDivVsFtrsSampleWide( psu$fst97 )
+dev.off()
+
+pdf( file="./results/images/SampleWideRichnessTrackingPIH100Dada2.pdf" )
+pltDivVsFtrsSampleWide( psu$dada2 )
+dev.off()
+
+rm(psu)
+rm(psupk)
+```
+
+Wastewater
+```{r}
+load( file="./data/wastewater/wastewater.rdata" ) #loads wastewaterMRobj
+ww <- convertMRtoES(wastewaterMRobj)
+
+pdf( file="./results/images/richnessTrackObservedRichnessWW97.pdf" )
+wwpk <- prokounter( exprs(ww), genus=as.character(fData(ww)$genus), fit.proc = "ss", plt = FALSE )
+pltDivVsFtrs( wwpk$df )
+dev.off()
+
+pdf( file="./results/images/SampleWideRichnessTrackingWW.pdf" )
+pltDivVsFtrsSampleWide( ww )
+dev.off()
+
+rm(ww)
+rm(wwpk)
+```
+
+
+Time Series study
+```{r}
+alm.AF <- readRDS( file="./data/alm.AF.RDS" )
+almpk <- prokounter( exprs( alm.AF ), genus=as.character(fData(alm.AF)$taxonomy6), fit.proc="ss", plt=TRUE)
+
+pdf( file="./results/images/richnessTrackObservedRichnessALM.pdf" )
+pltDivVsFtrs( almpk$df )
+dev.off()
+
+pdf( file="./results/images/SampleWideRichnessTrackingALM.pdf" )
+pltDivVsFtrsSampleWide( alm.AF )
+dev.off()
+
+
+rm(alm.AF)
+```
+
+
+Pseudomonas
+```{r}
+dfs <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+
+pdf( file="./results/images/richnessTrackObservedRichnessPseudo99.pdf" )
+pk <- prokounter( exprs(dfs$FST.99), genus=as.character(fData(dfs$FST.99)$Genus), fit.proc = "ss", plt = FALSE )
+pltDivVsFtrs( pk$df )
+dev.off()
+
+pdf( file="./results/images/richnessTrackObservedRichnessPseudo97.pdf" )
+pk <- prokounter( exprs(dfs$FST.97), genus=as.character(fData(dfs$FST.97)$Genus), fit.proc = "ss", plt = FALSE )
+pltDivVsFtrs( pk$df )
+dev.off()
+
+pdf( file="./results/images/richnessTrackObservedRichnessPseudoDada2.pdf" )
+pk <- prokounter( exprs(dfs$Dada2), genus=as.character(fData(dfs$Dada2)$Genus), fit.proc = "ss", plt = FALSE )
+pltDivVsFtrs( pk$df )
+dev.off()
+
+
+pdf( file="./results/images/SampleWideRichnessTrackingPseudo99.pdf" )
+pltDivVsFtrsSampleWide( dfs$FST.99 )
+dev.off()
+
+pdf( file="./results/images/SampleWideRichnessTrackingPseudo97.pdf" )
+pltDivVsFtrsSampleWide( dfs$FST.97)
+dev.off()
+
+pdf( file="./results/images/SampleWideRichnessTrackingPseudoDada2.pdf" )
+pltDivVsFtrsSampleWide( dfs$Dada2 )
+dev.off()
+
+rm( dfs )
+rm( pk )
+```
+
+
+
+# Theory and Simulations
+Some code for simulations. There are I specise, I*JperI false ones. 
+```{r}
+ssim <- function(pm,tau=10^(seq(2,7,by=.25))){
+  do.call(cbind, lapply( tau, function(t) rmultinom(n=1,size=t,prob=pm) ) )
+} #no noise here
+
+ssim4 <- function(pm, tau=10^(seq(2,7,by=.25)), gm=1e-2, JperI =1000, alpha=1/seq(JperI), eq=FALSE ){
+  if(eq){ #make all cond probs equal
+    alpha <- rep(1/(JperI-1),JperI)
+  }
+  ori <- lapply( tau, function(t){
+    y <- rmultinom( n=1, size=t, prob=pm )   
+    ywf <- lapply( seq_along(pm), function(i){
+      x <- pm[i]
+      tt <- y[i]
+      if(y[i]>0){
+        tryCatch({
+          al <- alpha
+          al[1] <- (1-gm)*x
+          al[2:length(al)] <-gm*x*al[1:(length(al)-1)] 
+          #pr <- rdiric( 1, shape=al )
+          #pr[ is.na(pr)] <- 0
+          pr <- al
+          yy <- rmultinom( n=1, size = tt, prob = pr )    
+        },error=function(e){
+          al <- 0*alpha
+          al[1] <- y[i]
+          yy <- al
+        })
+      } else {
+        yy <- 0*alpha
+      }
+      
+      res <- list()
+      res$true.obs <- 0
+      if(yy[1]>0){
+        res$true.obs <- 1
+      } 
+      res$yy <- yy
+      
+      res
+    })
+    
+    res <- list()
+    res$cnts <- unlist(lapply( ywf, function(x) x$yy ))
+    res$true.obs <- sum(sapply( ywf, function(x) x$true.obs ))
+    
+    res
+  })
+  
+  RES <- list()
+  RES$cnts <- do.call(cbind, lapply(ori, function(x) x$cnts ))
+  RES$true.obs <- sapply(ori, function(x) x$true.obs )
+  
+  RES
+  
+}
+```
+
+Data
+```{r}
+psu <- list()
+psu$fst97 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_97_SILVA132.RDS") 
+
+#pbac <- psu$fst97[ grep( "Paenibacillus", fData(psu$fst97)$Genus ), ]
+#pbacpm <- rowSums( exprs(pbac) );
+#tr <- 5
+#pbacpm <- pbacpm[1:tr]
+
+pbacpm <- 1/(.1^(seq(5))*seq(5))
+
+pbacpm <- pbacpm/sum(pbacpm)
+tau<-10^(seq(1,9,by=.25))
+dat <- ssim( pbacpm, tau )
+jperi <- 3;
+#dat.wnoise <- ssim3( pbacpm, gm=.02, JperI = jperi, tau = tau )
+dat.wnoise <- ssim4( pbacpm, gm=.02, JperI = jperi, tau = tau )
+k <- vegan::estimateR( t(dat) )
+k.wnoise <- vegan::estimateR( t(dat.wnoise$cnts) )
+
+#pdf(file="./results/images/Chao1SampledRichenssWithAndWithoutFalseDiscoveries.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(2,2), pty='s')
+
+#top row 
+plot( colSums( dat>0 ) ~ log(tau), xlab="Log Sampling Depth", ylab = "Observed Richness", main = "without false discoveries"  ) 
+abline(h=length(pbacpm), lty=2 )
+plot( k[2,] ~ log( tau ), xlab = "Log Sampling Depth", ylab = "Chao1" )
+abline(h=length(pbacpm), lty=2 )
+#plot( log(colSums( dat>0 )) ~ log(k[2,]), xlab = "Log Observed Richness", ylab = "Log Chao1" )
+
+#bottom row
+IplusIJperI <- length(pbacpm)*( 1 + (jperi-1)) #-1 because one of the jperi is the true type in ssim4
+plot( colSums( dat.wnoise$cnts>0 ) ~ log(tau), xlab="Log Sampling Depth", ylab = "Observed Richness", ylim = c(min(colSums( dat.wnoise$cnts>0 ))-.01, IplusIJperI+1), main = "with false discoveries"  ) 
+abline(h=length(pbacpm), lty=2 )
+abline(h=IplusIJperI, col='red', lty=2 )
+
+points( dat.wnoise$true.obs ~ log(tau), col ='green', pch=19 )
+
+plot( k.wnoise[2,] ~ log( tau ), xlab = "Log Sampling Depth", ylab = "Chao1", ylim = c(min(k.wnoise[2,])-.01, IplusIJperI+3) ); 
+abline(h=IplusIJperI, col='red', lty=2 )
+abline(h=length(pbacpm), lty=2 )
+
+#plot( log(colSums( dat.wnoise>0 )) ~ log(k.wnoise[2,]), xlab = "Log Observed Richness", ylab = "Log Chao1" )
+#dev.off()
+
+par(op)
+
+
+
+#install.packages("iNEXT")
+library(iNEXT)
+library (ggplot2) 
+i <- 10
+j <- 11
+zz <- list( "one"=dat.wnoise[dat.wnoise[,i]>0,i], "two"= dat.wnoise[dat.wnoise[,j]>0,j] )
+out <- iNEXT(zz, q=0, datatype ="abundance")
+ggiNEXT(out)
+
+
+```
+

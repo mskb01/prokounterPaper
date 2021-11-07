@@ -1,0 +1,93 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+Load
+```{r}
+require(metagenomeSeq)
+require(matrixStats)
+require(metagenomeSeq)
+require(portra50)
+require(matrixStats)
+require(MASS)
+require(prokounter)
+require(breakaway)
+
+source('~/Documents/research/StatisticalAnalysisProjects/NSPSU/utils_prokounter.R')
+source('~/Documents/research/intensityBias/src/simulator.R')
+source('~/Documents/research/intensityBias/src/otherDivsCalls.R')
+
+```
+
+
+# Only abundance change, no richness change, simulation
+
+This emphasizes the need for false discoveries in both the asymptotic (below) and non-asymptotic approaches (with interpolated-extrapolated analysis iNEXT next subsection ). 
+```{r}
+dfs <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+
+prok.df <- prokounter::getProkounterTrends( exprs( dfs$FST.97 ), 
+                                   genus = as.character(fData(dfs$FST.97)$Genus), fit.proc = "lo" 
+                                   )
+
+tst <- getSampleWidePerf( pkout = prok.df, ncore = 4  )
+saveRDS( tst, "./results/sampleSim.RDS" )
+
+res <- lapply( unique(tst$method), function(x){
+  i <- grep( x, rownames(tst) )
+  mu <- aggregate( tst[i,]$Estimate,list( tst[i,]$lr.cpi), mean, na.rm=TRUE  )
+  sd <- aggregate( tst[i,]$Estimate,list( tst[i,]$lr.cpi), sd, na.rm=TRUE   )
+  list( "mu"=mu,
+        "sigma"=sd
+        )
+}  )
+
+names( res ) <- unique( tst$method  )
+mus <- do.call(cbind, lapply( res, function(x) x$mu$x )) 
+sds <- do.call(cbind, lapply( res, function(x) x$sigma$x )) 
+xs <- res$chao1$mu$Group.1
+
+cols <- getColsForFactors( factor(rep(colnames(mus), each=nrow(mus)), 
+                                  levels=c("chao1", "ace", "baw", "prok") ), set="Set3" 
+                           )
+
+pdf( file="./results/images/NULL_samplewideSimulation.pdf", useDingbats = FALSE )
+op <- par(mfrow=c(1,2), pty='s')
+matplot( xs, mus, type='o', pch=19, col = cols$map[,1], xlab = bquote( "Fraction features differentially abundant,"~pi ), ylab= "Estimated differential richness", bty="n" )
+arrows( xs, mus-1.96*sds, xs, mus+1.96*sds, code=0, col=cols$map[,1] )
+legend( "bottomright", cols$map[,2], fill=cols$map[,1], bty="n" )
+dev.off()
+par(op)
+
+do.call(cbind, lapply( res, function(x) x$mu$Group.1 ) )
+
+```
+
+
+inext illiustration
+```{r}
+tst <- readRDS( file="./results/sampleSim.RDS" )
+prok.df <- prokounter::prokounter( exprs( dfs$FST.97 ), 
+                                   genus = as.character(fData(dfs$FST.97)$Genus), fit.proc = "lo" 
+                                   )
+sdp <- simDatProk( prok.df = prok.df$df, lr.cpi = .25 ) #25% features change
+
+two.samples <- c("sample8", "sample29")
+zz <- list( "Group 1"=exprs(sdp$inf.obj)[exprs(sdp$inf.obj)[,two.samples[1]]>0,two.samples[1]], 
+            "Group 2"= exprs(sdp$inf.obj)[exprs(sdp$inf.obj)[,two.samples[2]]>0,two.samples[2]]  )
+out <- iNEXT(zz, q=0, datatype ="abundance")
+#pdf(file="~/Documents/research/intensityBias/results/images/NULL_INEXT_samplewideSimulation.pdf", useDingbats = FALSE)
+ggiNEXT(out)
+#dev.off()
+
+
+
+infl <- log(sum(exp(sdp$lrobj$lrfc + sdp$lrobj$contr.lr.mu)))
+```
+
+

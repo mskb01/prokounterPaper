@@ -1,0 +1,214 @@
+---
+title: "Untitled"
+author: "M. Senthil Kumar"
+date: "7/26/2021"
+output: html_document
+---
+Skewed relative abundance fold changes leading to technical artifacts. 
+```{r}
+getGwideFCs2 <- function(mat, contr.si, case.si, g, prokdf, gltv=FALSE ){
+  
+  #op <- par(mfrow=c(1,4),pty='s', mar=c(4,6,2,1))
+  
+  g <- as.character(g)
+  
+  indx <- which( rowSums( mat[,c(contr.si,case.si)] ) >0 )
+  mat <- mat[ indx, ]
+  g <- g[indx]
+  ug <- unique(g)
+  indx <- list( "control"=contr.si, "case"=case.si )
+  qs <- lapply( indx, function(si){
+    zm <- mat[,si,drop=FALSE]
+    zm <- sweep( zm, 2, colSums( zm ), "/" )
+    sapply( unique( g ), function(x){
+      fi <- which( g==x )
+      mean(colSums( zm[fi,,drop=FALSE] ))
+    } )
+  } )
+  
+  
+  lfcs <- log(qs$case) - log(qs$con)
+  print( paste("Fraction LFCs defined:", sum( is.finite( lfcs ) )/length(lfcs) ) )
+  
+  
+  
+  gg <- rep( "Case Only", length(qs$case) )
+  gg[ which( lfcs==-Inf ) ] <- "Control Only"
+  gg[ which( is.finite(lfcs) ) ] <- NA
+  
+  lqs <- rep(NA, length(  qs$case  ) )
+  lqs[which( gg=="Case Only" )] <- log(qs$case)[ which( gg=="Case Only" ) ]
+  lqs[which( gg=="Control Only" )] <- log(qs$control)[ which( gg=="Control Only" ) ] 
+  
+  #par(op)
+  
+  
+  #ltv plot
+  contr.si.names <- colnames(mat)[contr.si]
+  case.si.names <- colnames(mat)[case.si]
+  
+  indxNames <- list( "control"=contr.si.names, "case"=case.si.names )
+  if(gltv){
+    ave.ltvs <- lapply( indxNames, function(sns){
+    
+    sapply( sns, function(j){
+      log( sum( exp( prokdf$gltv.wonly.gsigs[ which( (prokdf$samples==j) ) ])  ) ) 
+    } )
+  } )
+  } else {
+    ave.ltvs <- lapply( indxNames, function(sns){
+    
+    sapply( sns, function(j){
+      log( sum( exp( prokdf$ltv[ which( (prokdf$samples==j) ) ])  ) ) 
+    } )
+  } )
+  }
+  
+  ave.ltvs$case[is.nan( ave.ltvs$case )] <- 0 #the NaN here are caused because of absence. Hence the log contrib is 0.
+  ave.ltvs$control[is.nan( ave.ltvs$control )] <- 0
+  
+  ave.ltvs <- data.frame( "ave.ltv"=c( ave.ltvs$control, ave.ltvs$case ), "group"= c( rep( "Control", length(ave.ltvs$control) ), rep("Case", length(ave.ltvs$case)) ) )
+  
+  #  - plot 1
+  
+  #boxplot( ave.ltv~ group, data=ave.ltvs,
+  #        ylab = expression( hat(f)[t]("+") ) )
+  
+  if(gltv){
+    yl1 <- bquote(log~Sigma["g:y_{gj}>0"]~e^{hat(f)[R](log~y[gj])+f[G]} )
+    yl2 <- expression( bar(hat(f)[R](log~y[gj])+f[G])~"FC");
+  } else {
+    yl1 <- bquote(log~Sigma["g:y_{gj}>0"]~e^{hat(f)[R](log~y[gj])} )
+    yl2 <- expression( bar(hat(f)[R](log~y[gj]))~"FC");
+  }
+  
+  boxplot( ave.ltv~ group, data=ave.ltvs,
+          ylab = yl1 )
+  
+  # - plot 2, 3
+  boxplot(lqs ~ factor(gg), las=2, ylab = "Log Relative Frequency" )
+  points(lqs ~ factor(gg), las=2 )
+  hist( lfcs, nc=25, xlab="Log RelAb. FC", main ="" )
+  
+  
+  
+  if(gltv){
+    ave.ltvs <- lapply( indxNames, function(sns){
+    sapply( ug, function(x){
+      print(x)
+       mean(prokdf$gltv.wonly.gsigs[ which( (prokdf$samples %in% sns) & (prokdf$g==x) ) ])  
+    } )
+  } )
+  } else {
+    ave.ltvs <- lapply( indxNames, function(sns){
+    sapply( ug, function(x){
+      print(x)
+       mean(prokdf$ltv[ which( (prokdf$samples %in% sns) & (prokdf$g==x) ) ])  
+    } )
+  } )
+  }
+  
+  
+  ave.ltvs$case[is.nan( ave.ltvs$case )] <- 0 #the NaN here are caused because of absence. Hence the log contrib is 0.
+  ave.ltvs$control[is.nan( ave.ltvs$control )] <- 0
+  ave.ltvs2 <- ave.ltvs
+  
+  # 
+  ltv.fc <- ave.ltvs2$case-ave.ltvs2$control
+  gg <- rep( "Case Only", length(qs$case) )
+  gg[ which( lfcs==-Inf ) ] <- "Control Only"
+  gg[ which( is.finite(lfcs) ) ] <- NA
+  
+  lqs2 <- rep(NA, length(  qs$case  ) )
+  lqs2[which( gg=="Case Only" )] <- ave.ltvs2$case[which( gg=="Case Only" )]
+  lqs2[which( gg=="Control Only" )] <- ave.ltvs2$control[ which( gg=="Control Only" ) ]
+  #boxplot(lqs2 ~ factor(gg), las=2, ylab =expression( bar(hat(f)[t](y[g])))   )
+  
+  #plot.new()
+  #ave.ltvs <- data.frame( "ave.ltv"=unlist( ave.ltvs ), "group"= rep( c("Control", "Case") , each=length(ave.ltvs$control) ) )
+  #boxplot( ave.ltv~ group, data=ave.ltvs,
+  #         ylab = expression( hat(f)[t](y[g]) ) )
+  #points(lqs2 ~ factor(gg), las=2 )
+  plot( ltv.fc ~ lfcs, xlab = "log RelAb. FC" , ylab = yl2 )
+  abline( h=0 ); abline(v=0);
+  
+  #hist( ltv.fc )
+  
+  list( "lqs"=lqs,
+        "lfcs"=lfcs,
+        "ltv.fc"=ltv.fc,
+        "ave.ltvs"=ave.ltvs2
+        )
+  
+}
+ 
+
+#psupk <- prokounter( exprs(psu$fst97), genus=as.character(fData(psu$fst97)$Genus), fit.proc = "ss", plt = TRUE )
+
+pdf( file="~/Documents/research/intensityBias/results/images/LTVPlots_PSU99.pdf", useDingbats = FALSE, width = 11.7, height = 8.3 )
+op <- par(mfrow=c(3,4), pty='s', mar=c(4,6,2,1), omi=rep(.5, 4))
+
+psu <-list()
+psu$fst97 <- readRDS(file="~/Documents/research/intensityBias/data/PIH_CSF_100_Analysis_Jan2021/PIH_CSF_First100_data2_Qiime1_Jan2021/PIH_CSF_First100_97_SILVA132.RDS")
+pData(psu$fst97)$Sample_Def <- factor(pData(psu$fst97)$Sample_Def, levels=c("CaseControl", "Case", "LabControl"))
+pk97 <- prokounter::getProkounterTrends( mat=exprs(psu$fst97), genus = fData(psu$fst97)$Genus, fit.proc = "ss", plt=TRUE) 
+
+zltv <- getGwideFCs2( mat=exprs( psu$fst97 ), 
+             contr.si = which( pData(psu$fst97)$Sample_Def == "CaseControl" ), 
+             case.si=which( pData(psu$fst97)$Sample_Def == "Case" ), 
+             g=fData(psu$fst97)$Genus, prokdf = psupk$df, gltv = FALSE )
+zgltv <- getGwideFCs2( mat=exprs( psu$fst97 ), 
+             contr.si = which( pData(psu$fst97)$Sample_Def == "CaseControl" ), 
+             case.si=which( pData(psu$fst97)$Sample_Def == "Case" ), 
+             g=fData(psu$fst97)$Genus, prokdf = psupk$df, gltv = TRUE )
+plot( c(psupk$df$gltv.wonly.gsigs-psupk$df$ltv) ~psupk$df$ltv, cex=1, 
+     xlab = expression( hat(f)[R](log~y[gj]) ),  
+     ylab = expression( (hat(f)[R](log~y[gj])+hat(f)[G]) - hat(f)[R](log~y[gj]))
+     );
+abline( h=0, lty=2 )
+dev.off()
+par(op)
+
+
+pdf( file="~/Documents/research/intensityBias/results/images/LTVPlots_TS_PostInfecVsPre.pdf", useDingbats = FALSE, width = 11.7, height = 8.3 )
+op <- par(mfrow=c(3,4), pty='s', mar=c(4,6,2,1), omi=rep(.5, 4))
+alm.AF <- readRDS( file="./data/alm.AF.RDS" )
+almpk <- prokounter::getProkounterTrends( exprs( alm.AF ), genus=as.character(fData(alm.AF)$taxonomy6), fit.proc="ss", plt=TRUE )
+
+
+zltv <- getGwideFCs2( exprs( alm.AF ), 
+             contr.si = which( pData(alm.AF)$group == 1 ), 
+             case.si=which( pData(alm.AF)$group == 3 ), 
+             g=fData(alm.AF)$taxonomy6, prokdf=almpk$df )
+zgltv <- getGwideFCs2( exprs( alm.AF ), 
+             contr.si = which( pData(alm.AF)$group == 1 ), 
+             case.si=which( pData(alm.AF)$group == 3 ), 
+             g=fData(alm.AF)$taxonomy6, prokdf=almpk$df, gltv = TRUE )
+plot(c(almpk$df$gltv.wonly.gsigs-almpk$df$ltv)~almpk$df$ltv, cex=.2, 
+     xlab = expression( hat(f)[R](log~y[gj]) ),  
+     ylab = expression( (hat(f)[R](log~y[gj])+hat(f)[G]) -hat(f)[R](log~y[gj]))
+     );
+abline(h=0, lty=2 )
+dev.off()
+par(op)
+
+
+pdf( file="~/Documents/research/intensityBias/results/images/LTVPlots_TS_InfecVsPre.pdf", useDingbats = FALSE, width = 11.7, height = 8.3 )
+op <- par(mfrow=c(3,4), pty='s', mar=c(4,6,2,1), omi=rep(.5, 4))
+zltv <- getGwideFCs2( exprs( alm.AF ), 
+             contr.si = which( pData(alm.AF)$group == 1 ), 
+             case.si=which( pData(alm.AF)$group == 2 ), 
+             g=fData(alm.AF)$taxonomy6, prokdf=almpk$df )
+zgltv <- getGwideFCs2( exprs( alm.AF ), 
+             contr.si = which( pData(alm.AF)$group == 1 ), 
+             case.si=which( pData(alm.AF)$group == 2 ), 
+             g=fData(alm.AF)$taxonomy6, prokdf=almpk$df, gltv = TRUE )
+plot(c(almpk$df$gltv.wonly.gsigs-almpk$df$ltv)~almpk$df$ltv, cex=.2, 
+     xlab = expression( hat(f)[R](log~y[gj]) ),  
+     ylab = expression( (hat(f)[R](log~y[gj])+hat(f)[G]) - hat(f)[R](log~y[gj]) )
+     );
+abline( h=0, lty=2 )
+dev.off()
+par(op)
+
+```
