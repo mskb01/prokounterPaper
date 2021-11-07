@@ -1,4 +1,4 @@
-# Prokounter paper
+# R code for Prokounter paper
 
 This resource presents code used for analysis for the Prokounter manuscript. 
 
