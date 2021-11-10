@@ -1,0 +1,66 @@
+---
+title: "Paper_WGTACSHigherOrderManifestation"
+author: "M. Senthil Kumar"
+date: "11/10/2021"
+output: html_document
+---
+
+Higher taxonomic order taxa accumulations are explored here. 
+Accumulations in lower order manifest at higher orders. 
+An example is provided. 
+
+Function to plot
+```{r}
+pltfn <- function( obj, fam="Family", ord="Order", cla="Class", phy="Phylum"  ){
+  library(metagenomeSeq)
+  library(prokounter)
+  library(ggplot2) 
+  
+  pkf <- prokounter:::getProkounterTrends(mat=exprs(obj), genus = fData(obj)[[fam]])
+  pko <- prokounter:::getProkounterTrends(mat=exprs(obj), genus = fData(obj)[[ord]])
+  pkc <- prokounter:::getProkounterTrends(mat=exprs(obj), genus = fData(obj)[[cla]])
+  pkp <- prokounter:::getProkounterTrends(mat=exprs(obj), genus = fData(obj)[[phy]])
+  
+  
+  pp <- list( pkf, pko, pkc, pkp )
+  names(pp) <- c("Family", "Order", "Class", "Phylum")
+
+  tab <- do.call(rbind, lapply( names(pp), function(x) data.frame( pp[[x]]$df, "level"=x ) ))  
+  
+  tab$level <- factor( tab$level, levels=c("Family", "Order", "Class", "Phylum") )  
+  
+  p <- ggplot( tab, aes( x=lr , y=lm , color=g  ), show.legend=FALSE)  + geom_point(shape=1) + facet_grid( cols=vars(level)  ) + coord_equal() + theme_classic() + theme( legend.position="none" ) + xlab( "Log2 Recovered Abundance") + ylab( "Log2 Number of Taxa" )
+  print(p)
+
+  list( "tab"=tab, 
+        "p" =p
+        )
+  
+}
+
+```
+
+Mouse
+```{r}
+data(mouseData)
+mouse <- convertMRtoES(mouseData)
+pp <- pltfn( mouse, "family", "order", "class", "phylum" )
+ggsave( file="~/Documents/research/intensityBias/results/images/Mouse_HigherOrder_NumFeatures.pdf", width = 8, height = 2)
+```
+
+MSD
+```{r}
+library( msd16s )
+msd <- convertMRtoES(msd16s)
+pp <- pltfn( msd, "family", "order", "class", "phylum" )
+ggsave( file="~/Documents/research/intensityBias/results/images/MSD_HigherOrder_NumFeatures.pdf", width = 8, height = 2)
+
+```
+
+Pseudo
+```{r}
+dfs <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+pp <- pltfn( dfs$FST.99, "Family", "Order", "Class", "Phylum" )
+ggsave( file="~/Documents/research/intensityBias/results/images/MSD_HigherOrder_NumFeatures.pdf", width = 8, height = 2)
+
+```
