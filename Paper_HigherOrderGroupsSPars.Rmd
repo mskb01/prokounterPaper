@@ -1,0 +1,109 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+Summary: Higher order taxonomic parameters and accumulation parameters. 
+
+```{r}
+library(dplyr)
+```
+
+
+Function to plot
+```{r}
+pltfn <- function( obj, fam="Family", ord="Order", cla="Class", phy="Phylum"  ){
+  library(metagenomeSeq)
+  library(prokounter)
+  library(ggplot2) 
+  
+  tmpfn <- function(fac){
+    dr <- do.call(rbind, lapply( unique( fData(obj)[[fac]]), function(phy){
+      pin <- which( fData(obj)[[fac]] == phy )
+      data.frame( "y"= sum(colSums( exprs(obj[pin,]) )), "n"=sum( colSums( exprs(obj[pin,])>0 ) ), "Fac"=phy, "level"=fac )
+    } ) )
+    dr
+  }
+  
+  pkf <- tmpfn(fam)
+  pko <- tmpfn(ord)
+  pkc <- tmpfn(cla)
+  pkp <- tmpfn(phy)
+  
+  
+  pp <- list( pkf, pko, pkc, pkp )
+  names(pp) <- c("Family", "Order", "Class", "Phylum")
+
+  tab <- do.call(rbind, lapply( names(pp), function(x) data.frame( pp[[x]], "level"=x ) ))  
+  
+  tab$level <- factor( tab$level, levels=c("Family", "Order", "Class", "Phylum") )
+  
+  p <- tab %>% ggplot( aes( x=log2(y), y=log2(n) ,color=Fac) ) + geom_point() +
+  geom_smooth(method = "lm", se=TRUE, color="black", formula = y ~ x) +
+  #geom_text(aes(x = 25, y = 300,label=V1), parse = TRUE, inherit.aes=FALSE) +
+  theme_classic() + coord_equal() + theme(legend.position="none") + 
+  facet_grid( cols=vars(level) ) + xlab("Log2 Dataset-wide Recovered Abundance") + ylab( "Log2 Number of Taxa" ) 
+
+  print(p)
+  
+  #lm fit
+  z <- tab;
+  z <- z[ which(z$n!=0), ]
+  fit <- lm( log2(n) ~ log2(y) + level, data=z )
+  print(summary(fit))
+  
+
+  list( "tab"=tab, 
+        "p" =p,
+        "fit"=fit
+        )
+  
+}
+
+```
+
+
+Pseudomonas
+```{r}
+dfs <- readRDS( file="~/Documents/research/intensityBias/data/cycvardat.RDS" )
+pp1 <- pltfn( dfs$FST.99, "Family", "Order", "Class", "Phylum" )
+pp2 <- pltfn( dfs$FST.97, "Family", "Order", "Class", "Phylum" )
+pp3 <- pltfn( dfs$Dada2, "Family", "Order", "Class", "Phylum" )
+
+library(gridExtra)
+grid.arrange( pp1$p, pp2$p, pp3$p )
+
+```
+
+MBQC
+```{r}
+dfs <- list()
+dfs$MBQCHLB.FST99 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb99.RDS" )
+dfs$MBQCHLB.FST97 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/hlb97.RDS" )
+dfs$MBQCHLB.Dada2 <- readRDS(file="~/Documents/research/intensityBias/data/MBQC_Data/HL-B/dada.RDS" )
+
+pp1 <- pltfn( dfs$MBQCHLB.FST99, "Family", "Order", "Class", "Phylum" )
+pp2 <- pltfn( dfs$MBQCHLB.FST97, "Family", "Order", "Class", "Phylum" )
+pp3 <- pltfn( dfs$MBQCHLB.Dada2, "Family", "Order", "Class", "Phylum" )
+
+pp <- rbind( data.frame(pp1$tab, method="FST99"),
+             data.frame(pp2$tab, method="FST97"),
+             data.frame(pp3$tab, method="Dada2")
+             )
+pp$method <- factor( pp$method, levels= c( "FST99", "FST97", "Dada2" ) )
+
+
+library(gridExtra)
+grid.arrange( pp1$p, pp2$p, pp3$p )
+
+pp %>% ggplot( aes( x=log2(y), y=log2(n) ,color=Fac) ) + geom_point() +
+  geom_smooth(method = "lm", se=TRUE, color="black", formula = y ~ x) +
+  #geom_text(aes(x = 25, y = 300,label=V1), parse = TRUE, inherit.aes=FALSE) +
+  theme_classic() + coord_equal() + theme(legend.position="none") + 
+  facet_grid( cols=vars(level), rows=vars(method) ) + xlab("Log2 Dataset-wide Recovered Abundance") + ylab( "Log2 Number of Taxa" ) 
+
+
+```
+
